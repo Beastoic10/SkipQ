@@ -27,7 +27,11 @@
 ## Inventory and availability
 - Inventory is an MVP requirement, not a later feature.
 - Each menu item must track remaining stock quantity, maximum quantity per order, and manual availability.
-- Stock quantity must be decremented atomically when an order is successfully placed.
+- Inventory must be reserved or consumed atomically as part of trusted order/payment processing.
+- Cash orders may consume stock atomically at order creation.
+- Online orders must reserve stock before payment and consume the reservation only after trusted payment confirmation.
+- Failed, cancelled, or expired online payments must release their active inventory reservations safely.
+- Stock must never become negative or be oversold under concurrent orders.
 - Stock must never become negative.
 - If stock reaches zero, the item must display as OUT OF STOCK and cannot be ordered.
 - The client must never be trusted to enforce stock or quantity limits; the backend/database must enforce them.
@@ -38,8 +42,10 @@
 - QR availability must not depend on the order becoming READY.
 - The QR represents the customer's collection credential, not order readiness.
 - QR payloads must contain only an opaque, unpredictable token and must not expose sensitive customer/order information.
-- QR creation must be part of the same trusted order-creation workflow as order creation and stock reservation.
 - QR validation and collection must be performed server-side and atomically.
+- For cash orders, QR creation must occur atomically with successful order creation and inventory consumption.
+- For online orders, QR creation must occur only after trusted SSLCOMMERZ payment confirmation and successful order finalization.
+- The customer must never receive a valid collection QR for an unpaid or failed online order.
 
 
 ## Order cancellation
@@ -65,5 +71,9 @@
 - Payment transactions must have a unique transaction/reference ID linked to the SkipQ order.
 - Failed, cancelled, pending, and successful payments must be represented explicitly.
 - Refunds must be tracked separately from order cancellation.
+
+## Business Critical Validations
+
+- Never implement business-critical validation only in the UI; enforce it in trusted server/database logic as well.
 
 
