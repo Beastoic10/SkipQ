@@ -43,25 +43,6 @@ function getSafeAuthError(message?: string) {
   return "Authentication failed. Please check your details and try again.";
 }
 
-function getAuthErrorDiagnostics(error: { message?: string; status?: number; code?: string }) {
-  return {
-    message: error.message ?? "Unknown Supabase Auth error",
-    status: error.status ?? null,
-    code: error.code ?? null,
-  };
-}
-
-function getSignupAuthErrorMessage(error: { message?: string; status?: number; code?: string }) {
-  const diagnostics = getAuthErrorDiagnostics(error);
-
-  if (process.env.NODE_ENV !== "production") {
-    console.error("Supabase signup error", diagnostics);
-    return diagnostics.message;
-  }
-
-  return getSafeAuthError(error.message);
-}
-
 export async function login(_previousState: AuthActionState, formData: FormData) {
   const supabase = await createClient();
   const { email, password } = getCredentials(formData);
@@ -103,7 +84,7 @@ export async function signup(_previousState: AuthActionState, formData: FormData
   });
 
   if (error) {
-    return { error: getSignupAuthErrorMessage(error) };
+    return { error: getSafeAuthError(error.message) };
   }
 
   if (!data.user) {
