@@ -1,7 +1,9 @@
 -- SkipQ MVP database schema, RLS, and trusted transactional functions.
 -- Source of truth: docs/database-design.md
 
-create extension if not exists pgcrypto;
+-- Replace the original create extension line with:
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 create type public.role_name as enum ('customer', 'shop_staff', 'admin');
 create type public.approval_status as enum ('PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED');
@@ -343,7 +345,8 @@ declare
   v_order_number text;
 begin
   loop
-    v_order_number := 'SKQ-' || upper(substr(encode(gen_random_bytes(6), 'hex'), 1, 10));
+    -- Qualified gen_random_bytes
+    v_order_number := 'SKQ-' || upper(substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 10));
     exit when not exists (select 1 from public.orders where order_number = v_order_number);
   end loop;
   return v_order_number;
@@ -356,7 +359,8 @@ language sql
 immutable
 set search_path = public, pg_temp
 as $$
-  select encode(digest(p_token, 'sha256'), 'hex');
+  -- Qualified digest
+  select encode(extensions.digest(p_token, 'sha256'), 'hex');
 $$;
 
 create or replace function public.active_reserved_quantity(p_menu_item_id uuid)
@@ -382,7 +386,8 @@ as $$
 declare
   v_token text;
 begin
-  v_token := encode(gen_random_bytes(32), 'base64url');
+  -- Qualified gen_random_bytes
+  v_token := encode(extensions.gen_random_bytes(32), 'base64url');
   insert into public.collection_codes(order_id, token_hash)
   values (p_order_id, public.hash_collection_token(v_token));
   return v_token;
@@ -397,7 +402,8 @@ set search_path = public, pg_temp
 as $$
 declare
   v_user_id uuid := auth.uid();
-  v_order_id uuid := gen_random_uuid();
+  -- Qualified gen_random_uuid
+  v_order_id uuid := extensions.gen_random_uuid();
   v_order_number text := public.make_order_number();
   v_total numeric(12,2) := 0;
   v_item jsonb;
@@ -455,8 +461,9 @@ set search_path = public, pg_temp
 as $$
 declare
   v_user_id uuid := auth.uid();
-  v_order_id uuid := gen_random_uuid();
-  v_payment_id uuid := gen_random_uuid();
+  -- Qualified gen_random_uuid
+  v_order_id uuid := extensions.gen_random_uuid();
+  v_payment_id uuid := extensions.gen_random_uuid();
   v_order_number text := public.make_order_number();
   v_total numeric(12,2) := 0;
   v_item jsonb;
@@ -464,7 +471,8 @@ declare
   v_qty integer;
   v_uni uuid;
   v_cafe uuid;
-  v_transaction_ref text := 'SSL-' || upper(encode(gen_random_bytes(12), 'hex'));
+  -- Qualified gen_random_bytes
+  v_transaction_ref text := 'SSL-' || upper(encode(extensions.gen_random_bytes(12), 'hex'));
   v_expires_at timestamptz := now() + make_interval(mins => greatest(p_reservation_minutes, 1));
 begin
   if v_user_id is null or not public.has_role(v_user_id, 'customer') then raise exception 'Only authenticated customers can create checkouts'; end if;

@@ -17,7 +17,8 @@ set search_path = public, pg_temp
 as $$
 declare
   v_user_id uuid := auth.uid();
-  v_order_id uuid := gen_random_uuid();
+  -- Qualified gen_random_uuid
+  v_order_id uuid := extensions.gen_random_uuid();
   v_order_number text := public.make_order_number();
   v_total numeric(12,2) := 0;
   v_item record;
@@ -82,8 +83,9 @@ set search_path = public, pg_temp
 as $$
 declare
   v_user_id uuid := auth.uid();
-  v_order_id uuid := gen_random_uuid();
-  v_payment_id uuid := gen_random_uuid();
+  -- Qualified gen_random_uuid
+  v_order_id uuid := extensions.gen_random_uuid();
+  v_payment_id uuid := extensions.gen_random_uuid();
   v_order_number text := public.make_order_number();
   v_total numeric(12,2) := 0;
   v_item record;
@@ -91,7 +93,8 @@ declare
   v_qty integer;
   v_uni uuid;
   v_cafe uuid;
-  v_transaction_ref text := 'SSL-' || upper(encode(gen_random_bytes(12), 'hex'));
+  -- Qualified gen_random_bytes
+  v_transaction_ref text := 'SSL-' || upper(encode(extensions.gen_random_bytes(12), 'hex'));
   v_expires_at timestamptz := now() + make_interval(mins => greatest(p_reservation_minutes, 1));
 begin
   if v_user_id is null or not public.has_role(v_user_id, 'customer') then raise exception 'Only authenticated customers can create checkouts'; end if;
