@@ -17,7 +17,7 @@ The database is designed for approximately 10,000 registered users, with shop-sc
 1. **Single-shop orders only for MVP**: each order belongs to exactly one shop. This keeps inventory, terminal authorization, payment, QR validation, and cancellation ownership clear.
 2. **Supabase Auth remains the identity provider**: `profiles.id` corresponds to `auth.users.id`; application roles are assigned explicitly through database rows, not trusted client claims.
 3. **Payment state is separate from order state**: `orders.status` tracks food/order fulfillment; `payment_attempts.status` tracks payment state.
-4. **One `payment_attempts` table is enough for MVP**: it can represent cash payment records and multiple online attempts per order without a separate parent `payments` table.
+4. **One `payment_attempts` table is enough for MVP**: it can represent minimal cash payment records and multiple online attempts per order without a separate parent `payments` table.
 5. **Inventory uses physical stock plus active reservations**: `menu_items.stock_quantity` represents physical on-hand stock not yet permanently consumed. Available stock is `stock_quantity - active_reserved_quantity`. Cash orders decrement `stock_quantity` atomically. Online payments reserve first, then decrement stock and consume the reservation only after trusted SSLCOMMERZ confirmation.
 6. **QR codes are opaque collection credentials**: the QR payload contains only an unpredictable token; the database stores only a hashed token lookup value.
 7. **Privileged operations are transactional**: order creation, reservation, payment finalization, cancellation, QR generation/validation, and role assignment require PostgreSQL functions, Edge Functions, or server-side logic rather than direct client mutations.
@@ -52,7 +52,7 @@ The database is designed for approximately 10,000 registered users, with shop-sc
 
 - `payment_attempts`
 
-A separate `payments` parent table is not required for MVP because the order can have many `payment_attempts`, each attempt has its own method/provider/status/reference/metadata, and exactly one successful attempt can be enforced with a partial unique index. Cash is represented as one simple attempt without elaborate cash settlement/reconciliation tables.
+A separate `payments` parent table is not required for MVP because the order can have many `payment_attempts`, each attempt has its own method/provider/status/reference/metadata, and exactly one successful attempt can be enforced with a partial unique index. Cash is represented as one simple attempt without cash settlement, reconciliation, cash-drawer accounting, or automated cash refund workflows.
 
 ### Collection
 
@@ -377,7 +377,7 @@ Recommended values:
 - `COLLECTED`
 - `CANCELLED`
 
-If the team wants to keep the public lifecycle strictly to `PLACED → PREPARING → READY → COLLECTED`, `PAYMENT_PENDING` can be treated as an internal status and hidden from customer order history until payment finalization or expiry. It is included here because the database must safely represent online attempts before authoritative payment success.
+`PAYMENT_PENDING` is approved as an internal order status for online checkout attempts. It should be hidden or clearly treated as a non-kitchen internal state in customer-facing flows until trusted payment finalization moves the order to `PLACED`, or payment failure/cancellation/expiry releases the reservation and prevents QR generation.
 
 ### `payment_method`
 
@@ -705,7 +705,7 @@ Order creation
 → collection code generated
 ```
 
-Cash payment support is intentionally minimal. There are no cash drawer, settlement, reconciliation, or cash refund tables in the MVP design.
+Cash payment support is intentionally minimal. Cash orders should be represented by a simple `payment_attempts` row sufficient to record method, amount, status, and timestamps. There are no cash drawer, settlement, reconciliation, cash refund, or automated cash refund workflow tables in the MVP design.
 
 ### Online with SSLCOMMERZ
 
@@ -804,15 +804,13 @@ Payment confirmation and QR validation should not rely on realtime for correctne
 
 ## 16. Open decisions before migrations
 
-The database design intentionally resolves the major MVP modeling choices. These decisions still require approval before migrations are created:
+The database design intentionally resolves the major MVP modeling choices, including the internal `PAYMENT_PENDING` order status, single-table `payment_attempts` model, physical-stock-minus-active-reservations inventory model, one unique collection code per accepted/finalized order, terminal-only cancellation, and intentionally minimal cash payment representation. These decisions still require product approval before migrations are created:
 
 1. **Reservation timeout**: exact duration for `inventory_reservations.expires_at`, such as 10 or 15 minutes.
-2. **QR expiration**: whether collection codes expire and, if so, the exact duration.
-3. **Cash payment state**: whether cash orders are recorded as `PAID` immediately at order placement or remain `PENDING` until terminal collection/payment.
-4. **`PAYMENT_PENDING` order status**: approve adding this internal order state for online checkout attempts, or choose a separate checkout table instead.
-5. **`PREPARING → CANCELLED` inventory restoration rule**: exact food/category criteria for safely restoring stock.
-6. **Image policy**: upload size limits, allowed formats, and whether menu images require admin approval.
-7. **Refund operations**: whether MVP needs only manual refund tracking or a more explicit future `refunds` table before automated refund integration.
+2. **QR expiration policy**: whether collection codes expire and, if so, the exact duration.
+3. **`PREPARING → CANCELLED` inventory restoration rule**: exact food/category criteria for safely restoring stock.
+4. **Image upload policy**: upload size limits, allowed formats, and whether menu images require admin approval.
+5. **Future refund automation**: whether MVP needs only manual refund tracking or a more explicit future `refunds` table before automated refund integration.
 
 ## 17. Key design decision summary
 
