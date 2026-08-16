@@ -1,12 +1,3 @@
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
 
 # SkipQ permanent development rules
 
@@ -32,3 +23,57 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Prefer clear domain names matching the product language: universities, cafeterias, shops, menu items, orders, order items, carts, payments, QR collection codes, and roles.
 - Do not install dependencies unless they are necessary for the requested task.
 - Maintain accessible, responsive UI patterns influenced by the visual reference without copying it literally.
+
+## Inventory and availability
+- Inventory is an MVP requirement, not a later feature.
+- Each menu item must track remaining stock quantity, maximum quantity per order, and manual availability.
+- Inventory must be reserved or consumed atomically as part of trusted order/payment processing.
+- Cash orders may consume stock atomically at order creation.
+- Online orders must reserve stock before payment and consume the reservation only after trusted payment confirmation.
+- Failed, cancelled, or expired online payments must release their active inventory reservations safely.
+- Stock must never become negative or be oversold under concurrent orders.
+- Stock must never become negative.
+- If stock reaches zero, the item must display as OUT OF STOCK and cannot be ordered.
+- The client must never be trusted to enforce stock or quantity limits; the backend/database must enforce them.
+- Concurrent orders must not oversell remaining stock.
+
+## QR collection
+- A collection QR code must be generated immediately after a successful order is placed.
+- QR availability must not depend on the order becoming READY.
+- The QR represents the customer's collection credential, not order readiness.
+- QR payloads must contain only an opaque, unpredictable token and must not expose sensitive customer/order information.
+- QR validation and collection must be performed server-side and atomically.
+- For cash orders, QR creation must occur atomically with successful order creation and inventory consumption.
+- For online orders, QR creation must occur only after trusted SSLCOMMERZ payment confirmation and successful order finalization.
+- The customer must never receive a valid collection QR for an unpaid or failed online order.
+
+
+## Order cancellation
+- Customers must NOT have a self-service cancellation option.
+- Customers who need cancellation must contact the physical sales terminal.
+- Only authorized shop staff may initiate an order cancellation.
+- Cancellation must be performed through a protected backend operation.
+- The system must record who cancelled the order, when it was cancelled, and the cancellation reason.
+- Cancellation must obey the defined order-state rules.
+- If an order is cancelled while its items can still be returned to inventory, the appropriate quantities must be restored atomically.
+- Do not automatically restore inventory for prepared/otherwise non-restorable items without an explicit business rule.
+- Cancelled orders must remain in the database for audit/history rather than being deleted.
+
+## Payments
+- SSLCOMMERZ is the planned online payment gateway.
+- bKash should initially be treated as a payment channel through SSLCOMMERZ rather than as a separate payment integration, unless a later product decision requires direct bKash integration.
+- The system must support at minimum CASH and ONLINE payment methods for the MVP.
+- Payment status must be stored independently from order status.
+- Never treat a client-side payment-success redirect as proof that payment succeeded.
+- Online payment confirmation must be based on trusted server-to-server notification and transaction validation from SSLCOMMERZ.
+- Payment credentials and secrets must remain server-side.
+- The amount sent to the payment gateway must be calculated from trusted server/database values rather than client-submitted totals.
+- Payment transactions must have a unique transaction/reference ID linked to the SkipQ order.
+- Failed, cancelled, pending, and successful payments must be represented explicitly.
+- Refunds must be tracked separately from order cancellation.
+
+## Business Critical Validations
+
+- Never implement business-critical validation only in the UI; enforce it in trusted server/database logic as well.
+
+
