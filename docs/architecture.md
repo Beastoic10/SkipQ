@@ -36,9 +36,9 @@ The customer experience should be mobile-first, food-focused, rounded, card-base
 
 - `auth`: session handling, role checks, and profile loading.
 - `universities`: university selection and admin management.
-- `cafeterias`: cafeteria listing, active/approval state, and university association.
-- `shops`: shop profile, approval, operational status, and staff membership.
-- `menu`: item details, pricing, images, manual availability, and max quantity per order.
+- `cafeterias`: food vendor/business/brand listing, active/approval state, and university association.
+- `shops`: physical outlet/sales-point profile, approval, operational status, and staff membership. Customer UI should usually call these “Sales Points” or “Locations” rather than exposing the internal `shops` table name.
+- `menu`: outlet-specific item details, pricing, images, manual availability, and max quantity per order.
 - `inventory`: stock quantity, atomic consumption, stock reservations, release/expiry, and inventory audit metadata.
 - `cart`: in-progress customer cart and quantity UX; not a security boundary.
 - `orders`: order creation/finalization, order items, status lifecycle, order history, and status events.
@@ -52,19 +52,34 @@ The core customer flow is:
 
 1. Login.
 2. Select university.
-3. Select cafeteria.
-4. Select shop.
-5. Browse menu.
+3. Select cafeteria/vendor.
+4. Resolve the physical sales point:
+   - If the selected cafeteria has exactly one active, approved sales point, skip sales-point selection and open that sales point's menu.
+   - If the selected cafeteria has multiple active, approved sales points, ask the customer to choose a **Sales Point** or **Location**.
+   - If the selected cafeteria has no active, approved sales points, show an unavailable/empty state.
+5. Browse the menu for the selected physical sales point.
 6. View item details.
 7. Add items to cart and adjust quantities.
 8. Select payment method: `CASH` or `ONLINE`.
-9. Submit order/payment request.
+9. Submit order/payment request for that one physical sales point.
 10. Complete payment processing when required.
 11. See successful order confirmation.
 12. Immediately receive a QR code once the order is accepted/finalized.
 13. Track order status through realtime updates.
 14. See ready status/notification.
-15. Physically collect the order by presenting the QR code.
+15. Physically collect the order by presenting the QR code at the same sales point that owns the order.
+
+The canonical hierarchy is:
+
+```text
+University
+  → Cafeteria / Vendor / Business / Brand
+    → one or more physical Shops / Sales Points / Locations
+      → Menu Items
+      → Orders
+```
+
+A cafeteria/vendor may have exactly one customer-visible sales point or multiple customer-visible sales points. The selected sales point must always be represented internally because it determines the menu, stock, order destination, terminal ownership, staff authorization, QR validation boundary, and realtime scope.
 
 Customers must not have a self-service cancellation button. If a customer wants to cancel, they must physically contact the sales terminal, and an authorized shop staff member must perform the cancellation if the order is eligible.
 
@@ -84,29 +99,35 @@ This section describes the approved domain model. It is not a migration specific
   - Many-to-many relationship between users and roles.
   - Enables explicit role grants and revocation.
 - `shop_staff_memberships`
-  - Links staff users to one or more shops.
-  - Defines the shop boundary for terminal data access and staff operations.
+  - Links staff users to one or more physical shops/sales points.
+  - Defines the sales-point boundary for terminal data access and staff operations.
+  - Staff authorization must be checked against the specific sales point associated with orders, menu items, inventory, and QR collection; belonging to the same cafeteria/vendor is not sufficient.
   - Should include approval/active state and timestamps.
 
-### Campus and shops
+### Campus, vendors, and sales points
 
 - `universities`
-  - Parent entity for cafeterias.
+  - Parent entity for cafeterias/vendors.
   - Managed by admins.
 - `cafeterias`
+  - Represents the food vendor/business/brand, not necessarily a physical counter.
   - Belongs to one university.
   - Has active/approval state.
+  - May have exactly one physical sales point or multiple physical sales points.
   - Managed or approved by admins.
 - `shops`
+  - Represents a physical outlet/sales point/location belonging to a cafeteria/vendor.
   - Belongs to one cafeteria.
-  - Has owner/profile relationship where applicable, approval state, operational status, display metadata, and timestamps.
-  - Staff access is granted through `shop_staff_memberships`.
+  - Has owner/profile relationship where applicable, approval state, operational state, display metadata, and timestamps.
+  - Is operationally independent: its menu items, stock quantities, availability, max order quantities, incoming orders, terminal staff, QR validation, and realtime subscriptions are scoped to this specific sales point.
+  - Staff access is granted through `shop_staff_memberships` for the specific sales point.
 
 ### Menu
 
 - `menu_items`
-  - Belongs to one shop.
+  - Belongs to one physical shop/sales point, not only to the cafeteria/vendor.
   - Required fields include name, description, price, image path/reference, current stock quantity, maximum quantity per order, manual availability state, and timestamps.
+  - Different sales points for the same cafeteria/vendor may offer different menu items, prices, stock quantities, manual availability, and maximum order quantities.
   - Current menu price changes must never alter historical order totals because `order_items` store price snapshots.
 
 ### Inventory
@@ -120,7 +141,8 @@ This section describes the approved domain model. It is not a migration specific
 ### Orders
 
 - `orders`
-  - Belongs to customer profile, university, cafeteria, and shop.
+  - Belongs to exactly one customer profile, university, cafeteria/vendor, and physical shop/sales point.
+  - The physical sales point is the operational destination of the order.
   - Stores public order ID, order status, payment method, total calculated from trusted values, cancellation metadata, collection metadata, and timestamps.
   - Payment status must not be stored as the order lifecycle status.
 - `order_items`
@@ -348,14 +370,14 @@ When staff scans a QR code:
 2. Send the token to trusted backend logic.
 3. Validate the token hash and expiry/use state.
 4. Find the associated order.
-5. Verify the staff member belongs to the correct shop.
+5. Verify the staff member belongs to the exact physical sales point/shop that owns the order.
 6. Verify the order is `READY` and eligible for collection.
 7. Verify the QR has not already been used.
 8. Atomically mark the order as `COLLECTED`.
 9. Mark the QR token as used.
 10. Record collection timestamp and staff member.
 
-The client must never directly mark an order as collected. Reused QR tokens, QR tokens for another shop, and QR tokens for orders that are not ready must fail validation.
+The client must never directly mark an order as collected. Reused QR tokens, QR tokens for another physical sales point/shop, and QR tokens for orders that are not ready must fail validation. For example, Toua's Kitchen Ground Floor staff may validate Ground Floor orders, but Toua's Kitchen 3rd Floor staff may not validate those QR codes merely because both sales points belong to the same cafeteria/vendor.
 
 ## 9. Cancellation lifecycle
 
@@ -364,7 +386,7 @@ There is no customer-facing cancellation functionality. Customers must physicall
 Only authorized shop staff can cancel an eligible order. The cancellation operation must atomically:
 
 - Verify staff authentication and authorization.
-- Verify staff membership in the order's shop.
+- Verify staff membership in the exact physical sales point/shop that owns the order.
 - Verify the order is in a cancellable state.
 - Apply business rules for `PLACED` and `PREPARING` cancellation.
 - Record cancellation timestamp.
@@ -401,7 +423,7 @@ The shop terminal should be optimized for tablet/desktop sales terminal use whil
 Supabase RLS is mandatory.
 
 - Customers can browse approved public menu data, access their own orders, and access their own collection information.
-- Shop staff can access only their assigned shop's operational data.
+- Shop staff can access only their assigned physical sales point/shop operational data; cafeteria/vendor-level affiliation alone does not authorize operational access.
 - Admins can access authorized administrative data for universities, cafeterias, shops, staff assignments, users, roles, approvals, and system visibility.
 
 Privileged operations must not rely only on client-side checks. Use trusted server-side logic and/or database functions for:
@@ -429,7 +451,7 @@ Realtime is required for:
 - Shop terminal incoming orders.
 - Shop terminal relevant order changes.
 
-Subscriptions must be scoped to the relevant customer, order, or shop. Do not broadcast every system order to every connected user. Terminal screens should subscribe only to assigned shop orders and relevant active statuses.
+Subscriptions must be scoped to the relevant customer, order, or physical sales point/shop. Do not broadcast every system order to every connected user. Terminal screens should subscribe only to assigned sales-point orders and relevant active statuses. Multiple sales points under the same cafeteria/vendor must not receive one another's order feeds unless a later explicit business rule authorizes a shared operational view.
 
 ## 13. MVP production pilot scope
 
@@ -437,9 +459,9 @@ Subscriptions must be scoped to the relevant customer, order, or shop. Do not br
 
 - Authentication.
 - University selection.
-- Cafeteria selection.
-- Shop selection.
-- Menu browsing.
+- Cafeteria/vendor selection.
+- Sales-point selection only when a cafeteria has multiple active, approved sales points; otherwise direct menu entry for the single active sales point.
+- Menu browsing for the selected physical sales point.
 - Item details.
 - Stock and availability display.
 - Maximum quantity handling.
@@ -455,8 +477,8 @@ Subscriptions must be scoped to the relevant customer, order, or shop. Do not br
 ### Shop/Sales Terminal
 
 - Authentication.
-- Shop dashboard.
-- Incoming orders.
+- Sales-point dashboard.
+- Incoming orders scoped to assigned sales points.
 - Order status management.
 - Menu management.
 - Price updates.
@@ -484,7 +506,7 @@ Do not add unrelated features such as reviews, loyalty programs, promotions, adv
 
 - Index foreign keys and common filters for universities, cafeterias, shops, customers, orders, order statuses, payment statuses, and active reservations.
 - Scope customer order queries to authenticated user IDs.
-- Scope terminal queries and realtime subscriptions to assigned shop IDs.
+- Scope terminal queries and realtime subscriptions to assigned physical sales point/shop IDs.
 - Use atomic database functions or transactions for order creation, inventory reservation, inventory consumption, cancellation, and collection.
 - Keep append-only status events for auditability without overloading active order queries.
 - Store price snapshots on `order_items` to keep historical orders stable after menu changes.
@@ -492,13 +514,16 @@ Do not add unrelated features such as reviews, loyalty programs, promotions, adv
 - Release expired reservations through idempotent, concurrency-safe backend/database jobs.
 - Avoid global realtime channels for order data.
 
-## 15. Remaining product decisions
+## 15. Database impact and remaining product decisions
 
-The final requirements resolve the major previous ambiguities around payment methods, order statuses, QR timing, inventory, reservations, max quantity, and cancellation ownership. Remaining decisions before implementation are:
+The current database terminology can remain unchanged: `cafeterias` should be interpreted as cafeteria vendors/businesses/brands, and `shops` should be interpreted as physical outlets/sales points/locations. The existing relationship from `shops.cafeteria_id` to `cafeterias.id` already supports one or many sales points per cafeteria/vendor. The existing `menu_items.shop_id`, `orders.shop_id`, `shop_staff_memberships.shop_id`, QR validation, cancellation, and status-update rules already keep menus, stock, orders, staff authorization, QR collection, and realtime boundaries scoped to the physical sales point. No structural database change is required for this finalized model.
+
+Customer Foundation 4A should be updated in a later application milestone so selecting a cafeteria/vendor counts only active, approved shops: zero shows unavailable, one skips Sales Point selection and opens that sales point's menu, and two or more shows Sales Point/Location selection.
+
+The final requirements resolve the major previous ambiguities around payment methods, order statuses, QR timing, inventory, reservations, max quantity, cancellation ownership, and single-sales-point order ownership. Remaining decisions before implementation are:
 
 - Exact timeout duration for online payment reservations and QR token expiry.
 - Exact operational rule for when `PREPARING → CANCELLED` is allowed and whether stock can be restored for specific item categories.
-- Whether each order is limited to a single shop. The current architecture assumes a single shop per order to keep terminal ownership, inventory, payment, and QR validation clear for the MVP.
 - Whether cash payment is considered immediately settled at order placement or tracked as pending until collection/payment at terminal.
 - Which SSLCOMMERZ environments, credentials, webhook/IPN endpoints, and transaction validation rules will be used for pilot deployment.
 - Image upload limits, accepted formats, and any moderation/approval workflow for menu item images.
