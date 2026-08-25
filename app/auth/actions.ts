@@ -10,6 +10,48 @@ export type AuthActionState = {
   message?: string;
 };
 
+
+type SupabaseDiagnosticError = {
+  name?: unknown;
+  message?: unknown;
+  code?: unknown;
+  status?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+function getErrorField(error: SupabaseDiagnosticError, field: keyof SupabaseDiagnosticError) {
+  const value = error[field];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function logSupabaseOperation(operation: string, error: SupabaseDiagnosticError | null) {
+  if (!error) {
+    console.info("[signup diagnostics] Supabase operation succeeded", { operation });
+    return;
+  }
+
+  console.error("[signup diagnostics] Supabase operation failed", {
+    operation,
+    name: getErrorField(error, "name"),
+    message: getErrorField(error, "message"),
+    code: getErrorField(error, "code"),
+    status: getErrorField(error, "status"),
+    details: getErrorField(error, "details"),
+    hint: getErrorField(error, "hint"),
+  });
+}
+
+function getSafeDiagnosticError(operation: string, error: SupabaseDiagnosticError) {
+  const message = getErrorField(error, "message") ?? "Unknown Supabase error";
+  const code = getErrorField(error, "code");
+  const status = getErrorField(error, "status");
+  const codeParts = [code ? `code ${code}` : null, status ? `status ${status}` : null].filter(Boolean);
+  const suffix = codeParts.length ? ` (${codeParts.join(", ")})` : "";
+
+  return `${operation} failed: ${message}${suffix}`;
+}
+
 function sanitizeRedirectPath(value: FormDataEntryValue | null) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
     return null;
@@ -82,9 +124,10 @@ export async function signup(_previousState: AuthActionState, formData: FormData
       emailRedirectTo: `${getOrigin()}/auth/callback`,
     },
   });
+  logSupabaseOperation("supabase.auth.signUp", error);
 
   if (error) {
-    return { error: getSafeAuthError(error.message) };
+    return { error: getSafeDiagnosticError("supabase.auth.signUp", error) };
   }
 
   if (!data.user) {
@@ -95,9 +138,10 @@ export async function signup(_previousState: AuthActionState, formData: FormData
   const { error: profileError } = await admin
     .from("profiles")
     .upsert({ id: data.user.id }, { onConflict: "id" });
+  logSupabaseOperation("admin.profiles.upsert", profileError);
 
   if (profileError) {
-    return { error: "Account created, but profile setup failed. Please contact support." };
+    return { error: getSafeDiagnosticError("admin.profiles.upsert", profileError) };
   }
 
   const { data: customerRole, error: roleError } = await admin
@@ -105,9 +149,20 @@ export async function signup(_previousState: AuthActionState, formData: FormData
     .select("id")
     .eq("name", "customer")
     .maybeSingle();
+  logSupabaseOperation("admin.roles.lookup_customer", roleError);
 
-  if (roleError || !customerRole) {
-    return { error: "Account created, but role setup failed. Please contact support." };
+  if (roleError) {
+    return { error: getSafeDiagnosticError("admin.roles.lookup_customer", roleError) };
+  }
+
+  if (!customerRole) {
+    const missingRoleError = {
+      name: "MissingRoleError",
+      message: "Customer role was not found.",
+      code: "SKIPQ_CUSTOMER_ROLE_NOT_FOUND",
+    };
+    logSupabaseOperation("admin.roles.lookup_customer", missingRoleError);
+    return { error: getSafeDiagnosticError("admin.roles.lookup_customer", missingRoleError) };
   }
 
   const { data: existingCustomerRole, error: existingRoleError } = await admin
@@ -116,11 +171,13 @@ export async function signup(_previousState: AuthActionState, formData: FormData
     .eq("user_id", data.user.id)
     .eq("role_id", customerRole.id)
     .maybeSingle();
+  logSupabaseOperation("admin.user_roles.lookup_existing_customer", existingRoleError);
 
   if (existingRoleError) {
-    return { error: "Account created, but customer role setup failed. Please contact support." };
+    return { error: getSafeDiagnosticError("admin.user_roles.lookup_existing_customer", existingRoleError) };
   }
 
+  const userRoleOperation = existingCustomerRole ? "admin.user_roles.reactivate_customer" : "admin.user_roles.insert_customer";
   const { error: userRoleError } = existingCustomerRole
     ? await admin
         .from("user_roles")
@@ -129,9 +186,10 @@ export async function signup(_previousState: AuthActionState, formData: FormData
     : await admin
         .from("user_roles")
         .insert({ user_id: data.user.id, role_id: customerRole.id, is_active: true });
+  logSupabaseOperation(userRoleOperation, userRoleError);
 
   if (userRoleError) {
-    return { error: "Account created, but customer role setup failed. Please contact support." };
+    return { error: getSafeDiagnosticError(userRoleOperation, userRoleError) };
   }
 
   if (!data.session) {
