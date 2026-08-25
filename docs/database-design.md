@@ -6,19 +6,19 @@ This document proposes the PostgreSQL/Supabase data model for the SkipQ MVP. It 
 
 The design supports:
 
-- Customer authentication profiles, university/cafeteria/shop selection, menu browsing, inventory-aware ordering, cash/online payment selection, order tracking, order history, and immediate QR collection credentials after successful order acceptance/finalization.
-- Shop/Sales Terminal staff membership, menu management, price and stock management, manual availability, maximum quantity per order, incoming orders, valid order status updates, authorized cancellation, QR validation, and collection.
-- Admin management of universities, cafeterias, shops, approvals, staff assignments, users, roles, and basic system visibility.
+- Customer authentication profiles, university/cafeteria-vendor/sales-point selection, menu browsing for the selected physical sales point, inventory-aware ordering, cash/online payment selection, order tracking, order history, and immediate QR collection credentials after successful order acceptance/finalization.
+- Shop/Sales Terminal staff membership for physical sales points, outlet-specific menu management, price and stock management, manual availability, maximum quantity per order, incoming orders, valid order status updates, authorized cancellation, QR validation, and collection.
+- Admin management of universities, cafeteria vendors, physical shops/sales points, approvals, staff assignments, users, roles, and basic system visibility.
 
 The database is designed for approximately 10,000 registered users, with shop-scoped operational queries, customer-scoped history queries, and tightly scoped realtime subscriptions.
 
 ### Core design choices
 
-1. **Single-shop orders only for MVP**: each order belongs to exactly one shop. This keeps inventory, terminal authorization, payment, QR validation, and cancellation ownership clear.
+1. **Single-sales-point orders only for MVP**: each order belongs to exactly one physical shop/sales point. This keeps inventory, terminal authorization, payment, QR validation, and cancellation ownership clear. A cafeteria/vendor may have one or multiple sales points, but an order never spans more than one of them.
 2. **Supabase Auth remains the identity provider**: `profiles.id` corresponds to `auth.users.id`; application roles are assigned explicitly through database rows, not trusted client claims.
 3. **Payment state is separate from order state**: `orders.status` tracks food/order fulfillment; `payment_attempts.status` tracks payment state.
 4. **One `payment_attempts` table is enough for MVP**: it can represent minimal cash payment records and multiple online attempts per order without a separate parent `payments` table.
-5. **Inventory uses physical stock plus active reservations**: `menu_items.stock_quantity` represents physical on-hand stock not yet permanently consumed. Available stock is `stock_quantity - active_reserved_quantity`. Cash orders decrement `stock_quantity` atomically. Online payments reserve first, then decrement stock and consume the reservation only after trusted SSLCOMMERZ confirmation.
+5. **Inventory is sales-point specific and uses physical stock plus active reservations**: `menu_items.stock_quantity` represents physical on-hand stock not yet permanently consumed. Available stock is `stock_quantity - active_reserved_quantity`. Cash orders decrement `stock_quantity` atomically. Online payments reserve first, then decrement stock and consume the reservation only after trusted SSLCOMMERZ confirmation.
 6. **QR codes are opaque collection credentials**: the QR payload contains only an unpredictable token; the database stores only a hashed token lookup value.
 7. **Privileged operations are transactional**: order creation, reservation, payment finalization, cancellation, QR generation/validation, and role assignment require PostgreSQL functions, Edge Functions, or server-side logic rather than direct client mutations.
 
@@ -31,11 +31,11 @@ The database is designed for approximately 10,000 registered users, with shop-sc
 - `user_roles`
 - `shop_staff_memberships`
 
-### Campus and shops
+### Campus, vendors, and sales points
 
 - `universities`
-- `cafeterias`
-- `shops`
+- `cafeterias` (food vendors/businesses/brands)
+- `shops` (physical outlets/sales points/locations)
 
 ### Menu and inventory
 
@@ -111,13 +111,15 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 
 ### TABLE: cafeterias
 
+A `cafeteria` represents a food vendor, business, or brand within a university. It is not necessarily a single physical counter. A cafeteria/vendor may have exactly one physical outlet or multiple physical outlets. Customer-facing UI can simply call this a “Cafeteria.”
+
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
-| `id` | `uuid` | No | Primary key | Cafeteria identifier. |
+| `id` | `uuid` | No | Primary key | Cafeteria/vendor identifier. |
 | `university_id` | `uuid` | No | Foreign key to `universities.id` | Parent university. |
-| `name` | `text` | No | Non-empty; unique with `university_id` recommended | Cafeteria display name. |
+| `name` | `text` | No | Non-empty; unique with `university_id` recommended | Cafeteria/vendor display name. |
 | `slug` | `text` | No | Unique with `university_id`; URL-safe | Stable route/reference key. |
-| `is_active` | `boolean` | No | Default `true` | Customer visibility/operational state. |
+| `is_active` | `boolean` | No | Default `true` | Customer visibility for the cafeteria/vendor. |
 | `approval_status` | `approval_status` | No | Default `PENDING` | Admin approval state. |
 | `created_by` | `uuid` | Yes | Foreign key to `profiles.id` | Creator/admin. |
 | `approved_by` | `uuid` | Yes | Foreign key to `profiles.id` | Admin approver. |
@@ -127,16 +129,18 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 
 ### TABLE: shops
 
+A `shop` represents a physical outlet, sales point, or location belonging to a cafeteria/vendor. Customer-facing UI should generally use “Sales Point” or “Location” when a customer must choose among multiple outlets. Each shop/sales point is operationally independent even when multiple shops belong to the same cafeteria.
+
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
-| `id` | `uuid` | No | Primary key | Shop identifier. |
-| `cafeteria_id` | `uuid` | No | Foreign key to `cafeterias.id` | Parent cafeteria. |
-| `owner_profile_id` | `uuid` | Yes | Foreign key to `profiles.id` | Optional owner/shop registrant. |
-| `name` | `text` | No | Non-empty; unique with `cafeteria_id` recommended | Shop display name. |
+| `id` | `uuid` | No | Primary key | Physical outlet/sales-point identifier. |
+| `cafeteria_id` | `uuid` | No | Foreign key to `cafeterias.id` | Parent cafeteria/vendor. |
+| `owner_profile_id` | `uuid` | Yes | Foreign key to `profiles.id` | Optional owner/outlet registrant. |
+| `name` | `text` | No | Non-empty; unique with `cafeteria_id` recommended | Physical sales-point display name, such as “Ground Floor” or “3rd Floor.” |
 | `slug` | `text` | No | Unique with `cafeteria_id`; URL-safe | Stable route/reference key. |
-| `description` | `text` | Yes | | Customer-facing description. |
-| `logo_path` | `text` | Yes | Supabase Storage path | Optional shop image/logo. |
-| `is_active` | `boolean` | No | Default `true` | Operational visibility. |
+| `description` | `text` | Yes | | Customer-facing sales-point/location description. |
+| `logo_path` | `text` | Yes | Supabase Storage path | Optional outlet image/logo. |
+| `is_active` | `boolean` | No | Default `true` | Operational visibility for this physical sales point. |
 | `approval_status` | `approval_status` | No | Default `PENDING` | Admin approval workflow. |
 | `created_by` | `uuid` | Yes | Foreign key to `profiles.id` | Creator/admin/registrant. |
 | `approved_by` | `uuid` | Yes | Foreign key to `profiles.id` | Admin approver. |
@@ -149,21 +153,21 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
 | `id` | `uuid` | No | Primary key | Membership identifier. |
-| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Shop the staff member can operate. |
+| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Physical sales point/shop the staff member can operate. |
 | `user_id` | `uuid` | No | Foreign key to `profiles.id` | Staff user. |
 | `is_active` | `boolean` | No | Default `true` | Enables activation/deactivation. |
 | `assigned_by` | `uuid` | Yes | Foreign key to `profiles.id` | Admin/system actor assigning staff. |
 | `created_at` | `timestamptz` | No | Default `now()` | Assignment timestamp. |
 | `updated_at` | `timestamptz` | No | Default `now()` | Update timestamp. |
 
-A user must have an active `shop_staff` role and an active `shop_staff_memberships` row for a shop to operate that shop.
+A user must have an active `shop_staff` role and an active `shop_staff_memberships` row for a specific physical sales point/shop to operate that sales point. Membership in one sales point does not authorize another sales point owned by the same cafeteria/vendor.
 
 ### TABLE: menu_items
 
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
 | `id` | `uuid` | No | Primary key | Menu item identifier. |
-| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Owning shop. |
+| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Owning physical sales point/shop. Menu items do not belong only to the cafeteria/vendor. |
 | `name` | `text` | No | Non-empty | Item name. |
 | `description` | `text` | Yes | | Customer-facing details. |
 | `price` | `numeric(12,2)` | No | Check `price >= 0` | Current sell price. Historical orders use snapshots. |
@@ -175,7 +179,7 @@ A user must have an active `shop_staff` role and an active `shop_staff_membershi
 | `created_at` | `timestamptz` | No | Default `now()` | Creation timestamp. |
 | `updated_at` | `timestamptz` | No | Default `now()` | Update timestamp. |
 
-Backend order functions must require `is_active = true`, `is_manually_available = true`, requested quantity within `max_quantity_per_order`, and enough available stock.
+Backend order functions must require `is_active = true`, `is_manually_available = true`, requested quantity within `max_quantity_per_order`, and enough available stock for the selected physical sales point. The same cafeteria/vendor can have different menus, prices, stock, availability, and maximum quantities at different sales points.
 
 ### TABLE: orders
 
@@ -185,8 +189,8 @@ Backend order functions must require `is_active = true`, `is_manually_available 
 | `order_number` | `text` | No | Unique; human-readable, e.g. `SKQ-1042` | Public order number shown to customers/staff. |
 | `customer_id` | `uuid` | No | Foreign key to `profiles.id` | Customer who placed the order. |
 | `university_id` | `uuid` | No | Foreign key to `universities.id` | Denormalized campus context at order time. |
-| `cafeteria_id` | `uuid` | No | Foreign key to `cafeterias.id` | Denormalized cafeteria context at order time. |
-| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Owning shop; exactly one shop per order. |
+| `cafeteria_id` | `uuid` | No | Foreign key to `cafeterias.id` | Denormalized cafeteria/vendor context at order time. |
+| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Owning physical sales point/shop; exactly one sales point per order. |
 | `status` | `order_status` | No | Valid enum; default depends on flow | Current order lifecycle status optimized for current-state queries. |
 | `payment_method` | `payment_method` | No | `CASH` or `ONLINE` | Customer-selected payment method. |
 | `total_amount` | `numeric(12,2)` | No | Check `total_amount >= 0` | Trusted server/database-calculated total. |
@@ -544,26 +548,26 @@ RLS should be enabled on all application tables. Policies below are conceptual a
 ### Public/customer-readable campus data
 
 - `universities`: authenticated users can read active universities; admins can manage all.
-- `cafeterias`: authenticated users can read active and approved cafeterias under active universities; admins can manage all.
-- `shops`: authenticated users can read active and approved shops under active cafeterias; assigned staff can read their shops; admins can manage all.
-- `menu_items`: authenticated users can read active menu items for active/approved shops; assigned staff can manage their shop menu items; admins can read/manage as authorized.
+- `cafeterias`: authenticated users can read active and approved cafeteria vendors under active universities; admins can manage all.
+- `shops`: authenticated users can read active and approved physical sales points under active/approved cafeteria vendors; assigned staff can read their sales points; admins can manage all.
+- `menu_items`: authenticated users can read active menu items for active/approved physical sales points; assigned staff can manage menu items for their assigned sales points; admins can read/manage as authorized. Customer navigation should count only active/approved sales points: zero shows unavailable, one skips selection and opens the menu, two or more shows Sales Point/Location selection.
 
 ### Customer data policies
 
 - `profiles`: users can read/update their own profile fields; admins can manage profiles.
 - `orders`: customers can read their own orders; customers should not directly insert/update orders outside trusted order functions; staff can read shop orders; admins can read authorized data.
-- `order_items`: customers can read items for their own orders; staff can read items for assigned shop orders; writes only through trusted order functions.
-- `order_status_events`: customers can read events for their own orders; staff can read events for assigned shop orders; inserts only through trusted status/cancellation/collection functions.
-- `payment_attempts`: customers can read sanitized payment attempts for their own orders; staff can read necessary payment state for assigned shop orders; gateway-sensitive metadata may require server-only access or restricted columns/views.
+- `order_items`: customers can read items for their own orders; staff can read items for assigned sales-point orders; writes only through trusted order functions.
+- `order_status_events`: customers can read events for their own orders; staff can read events for assigned sales-point orders; inserts only through trusted status/cancellation/collection functions.
+- `payment_attempts`: customers can read sanitized payment attempts for their own orders; staff can read necessary payment state for assigned sales-point orders; gateway-sensitive metadata may require server-only access or restricted columns/views.
 - `collection_codes`: customers can read enough data to display their own QR token only if the raw token is returned at generation time or kept in a secure client state. The table stores only `token_hash`, so direct customer reads should avoid exposing hashes. Staff cannot directly update collection rows; validation uses trusted logic.
 
 ### Shop staff policies
 
-- Staff can read/update menu items for assigned active shop memberships.
-- Staff can update stock/manual availability/max quantity only for assigned shops, preferably through trusted stock adjustment functions for auditability.
-- Staff can read and progress orders only for assigned shops and only through valid status-update functions.
-- Staff can cancel eligible orders only through trusted cancellation logic.
-- Staff can validate QR credentials only through trusted QR validation logic.
+- Staff can read/update menu items only for assigned active physical sales point/shop memberships.
+- Staff can update stock/manual availability/max quantity only for assigned sales points, preferably through trusted stock adjustment functions for auditability.
+- Staff can read and progress orders only for assigned sales points and only through valid status-update functions.
+- Staff can cancel eligible orders only through trusted cancellation logic for the order's sales point.
+- Staff can validate QR credentials only through trusted QR validation logic for the order's sales point; staff at another outlet of the same cafeteria/vendor must fail authorization.
 
 ### Admin policies
 
@@ -594,9 +598,9 @@ These are design specifications only. No functions are implemented yet.
 
 | Aspect | Design |
 | ------ | ------ |
-| Inputs | Customer ID from session, shop ID, requested item IDs/quantities, payment method `CASH`. |
+| Inputs | Customer ID from session, physical sales point/shop ID, requested item IDs/quantities, payment method `CASH`. |
 | Tables affected | `menu_items`, `orders`, `order_items`, `payment_attempts`, `order_status_events`, `collection_codes`. |
-| Validations | Authenticated customer; shop/cafeteria/university active and approved; single shop; each item active, manually available, stock > 0, quantity <= max per order, enough available stock; totals calculated server-side. |
+| Validations | Authenticated customer; physical sales point/shop, cafeteria/vendor, and university active and approved; single sales point; each item active, manually available, stock > 0, quantity <= max per order, enough available stock; totals calculated server-side. |
 | Atomic operations | Lock/update menu item stock rows; decrement `stock_quantity`; create order with `PLACED`; create item snapshots; create simple cash payment attempt; create initial status event; generate/store hashed collection token. |
 | Failure/rollback | Any validation or stock update failure rolls back all inserts and stock changes; no partial order or QR remains. |
 
@@ -604,7 +608,7 @@ These are design specifications only. No functions are implemented yet.
 
 | Aspect | Design |
 | ------ | ------ |
-| Inputs | Customer ID from session, shop ID, requested item IDs/quantities, payment method `ONLINE`. |
+| Inputs | Customer ID from session, physical sales point/shop ID, requested item IDs/quantities, payment method `ONLINE`. |
 | Tables affected | `menu_items`, `orders`, `order_items`, `inventory_reservations`, `payment_attempts`, optionally status events. |
 | Validations | Same menu/shop/customer validations as cash; available stock calculated as physical stock minus active reservations; quantity <= max per order; trusted total calculation. |
 | Atomic operations | Lock relevant menu item rows; verify available stock; create `PAYMENT_PENDING` order; create item snapshots; create `PENDING` payment attempt with unique transaction reference; create `ACTIVE` reservations per item with expiry; initiate SSLCOMMERZ via server-side logic after DB transaction or within a controlled orchestration flow. |
@@ -670,7 +674,7 @@ This design chooses option A:
 available_stock = menu_items.stock_quantity - sum(ACTIVE inventory_reservations.quantity for the item)
 ```
 
-`menu_items.stock_quantity` represents physical stock not permanently consumed. Active online reservations reduce what customers can reserve/order, but do not permanently decrement physical stock until payment is authoritatively confirmed.
+`menu_items.stock_quantity` represents physical stock at one specific sales point that has not been permanently consumed. Active online reservations reduce what customers can reserve/order, but do not permanently decrement physical stock until payment is authoritatively confirmed.
 
 ### Why this model
 
@@ -742,16 +746,16 @@ Retries are handled by creating additional `payment_attempts` rows for the same 
 - QR is generated immediately for successful cash orders.
 - QR is generated only after authoritative SSLCOMMERZ validation/finalization for online orders.
 - Validation is server-side and atomic.
-- Validation requires staff membership in the order's shop.
+- Validation requires staff membership in the exact physical sales point/shop that owns the order.
 - Validation requires order status `READY`.
 - Reused tokens fail because `used_at` is already set.
-- Wrong-shop tokens fail because staff authorization is checked against `orders.shop_id`.
+- Wrong-sales-point tokens fail because staff authorization is checked against `orders.shop_id`, even when another sales point belongs to the same cafeteria/vendor.
 
 ## 13. Cancellation model
 
 Customers cannot cancel orders from the application.
 
-Only active shop staff for the order's shop can cancel eligible orders. Cancellation supports:
+Only active shop staff for the order's physical sales point/shop can cancel eligible orders. Cancellation supports:
 
 - `PLACED → CANCELLED`
 - `PREPARING → CANCELLED` only when business rules allow it.
@@ -785,7 +789,7 @@ Realtime should be enabled selectively.
 ### Avoid broad/global realtime
 
 - Customer clients should subscribe only to their own order rows or order-specific channels.
-- Shop terminal clients should subscribe only to assigned shop orders and relevant active statuses.
+- Shop terminal clients should subscribe only to assigned physical sales point/shop orders and relevant active statuses. Multiple outlets under the same cafeteria/vendor must not receive one another's order feeds unless explicitly required later.
 - Admin realtime should be limited and likely unnecessary for MVP except approval dashboards if needed.
 - Avoid global subscriptions for all orders, payment attempts, collection codes, or profiles.
 
@@ -798,11 +802,25 @@ Payment confirmation and QR validation should not rely on realtime for correctne
 - Do not store image binaries in PostgreSQL.
 - Storage policies should align with database ownership:
   - Public read or signed read for approved menu/shop images, depending on privacy needs.
-  - Write/update only by assigned shop staff for their shop media or admins.
+  - Write/update only by assigned shop staff for their physical sales-point/shop media or admins.
   - Profile avatar writes only by the profile owner or admins.
 - Image upload limits, accepted file types, and moderation requirements remain open product decisions.
 
-## 16. Open decisions before migrations
+## 16. Database impact analysis
+
+The current schema already supports the finalized cafeteria/vendor and physical sales-point model structurally:
+
+- `cafeterias` is the vendor/business/brand table and remains linked to `universities`.
+- `shops.cafeteria_id` allows each cafeteria/vendor to have one or many physical sales points.
+- `menu_items.shop_id` keeps menu, price, stock, manual availability, and max quantity scoped to one physical sales point.
+- `orders` stores both `cafeteria_id` and `shop_id`, preserving vendor context while routing each order to exactly one physical sales point.
+- `shop_staff_memberships.shop_id`, existing RLS helpers, QR validation rules, cancellation rules, and status-update rules are already sales-point scoped through the shop ID.
+- `inventory_reservations.menu_item_id` remains outlet-specific because each menu item belongs to a shop/sales point.
+- Realtime guidance remains compatible when subscriptions are scoped to `orders.shop_id` or equivalent sales-point channels.
+
+No structural database change is required for the finalized model. Future Customer Foundation 4A implementation work should update customer navigation to skip the Sales Point screen when a selected cafeteria has exactly one active/approved shop and to show Sales Point selection only when there are multiple active/approved shops.
+
+## 17. Open decisions before migrations
 
 The database design intentionally resolves the major MVP modeling choices, including the internal `PAYMENT_PENDING` order status, single-table `payment_attempts` model, physical-stock-minus-active-reservations inventory model, one unique collection code per accepted/finalized order, terminal-only cancellation, and intentionally minimal cash payment representation. These decisions still require product approval before migrations are created:
 
@@ -812,12 +830,12 @@ The database design intentionally resolves the major MVP modeling choices, inclu
 4. **Image upload policy**: upload size limits, allowed formats, and whether menu images require admin approval.
 5. **Future refund automation**: whether MVP needs only manual refund tracking or a more explicit future `refunds` table before automated refund integration.
 
-## 17. Key design decision summary
+## 18. Key design decision summary
 
 - Use Supabase Auth plus `profiles`, `roles`, and `user_roles` for explicit authorization.
-- Use `shop_staff_memberships` to define which shop(s) a staff user can operate, with active/deactivated membership support.
-- Model the campus hierarchy as University → Cafeteria → Shop → Menu Items.
-- Keep MVP orders single-shop only.
+- Use `shop_staff_memberships` to define which physical sales point/shop(s) a staff user can operate, with active/deactivated membership support.
+- Model the canonical hierarchy as University → Cafeteria/Vendor → physical Shop/Sales Point → Menu Items.
+- Keep MVP orders scoped to exactly one physical sales point/shop.
 - Store stock, maximum quantity per order, and manual availability separately on `menu_items`.
 - Use physical stock minus active reservations for available stock.
 - Use `inventory_reservations` for online payment holds and consume stock only after trusted SSLCOMMERZ confirmation.
