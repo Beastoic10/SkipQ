@@ -101,7 +101,7 @@ export async function login(_previousState: AuthActionState, formData: FormData)
   }
 
   const context = await getCurrentUserContext();
-  redirect(redirectTo ?? getPostLoginPath(context?.roles ?? []));
+  redirect(redirectTo ?? getPostLoginPath(context?.roles ?? [], context?.terminalAccount?.shop_id));
 }
 
 export async function signup(_previousState: AuthActionState, formData: FormData) {

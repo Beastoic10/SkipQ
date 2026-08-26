@@ -14,7 +14,7 @@ export default async function Home() {
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           {context ? (
             <>
-              <Link href={getPostLoginPath(context.roles)} className="rounded-full bg-orange-600 px-5 py-3 text-center font-semibold text-white hover:bg-orange-700">Continue</Link>
+              <Link href={getPostLoginPath(context.roles, context.terminalAccount?.shop_id)} className="rounded-full bg-orange-600 px-5 py-3 text-center font-semibold text-white hover:bg-orange-700">Continue</Link>
               <LogoutButton />
             </>
           ) : (

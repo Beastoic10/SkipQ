@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
+import { createClient } from "@/lib/supabase/client";
 import type { CustomerOrderDetails } from "@/lib/customer/orders";
 
 type OrderQRClientProps = {
@@ -10,6 +12,7 @@ type OrderQRClientProps = {
 };
 
 export function OrderQRClient({ order }: OrderQRClientProps) {
+  const router = useRouter();
   const [qrState, setQrState] = useState<{
     isLoading: boolean;
     dataUrl: string | null;
@@ -19,6 +22,30 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
     dataUrl: null,
     hasToken: true,
   });
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`customer-order-${order.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `id=eq.${order.id}`,
+        },
+        () => {
+          router.refresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [order.id, router]);
 
   useEffect(() => {
     let isCancelled = false;
