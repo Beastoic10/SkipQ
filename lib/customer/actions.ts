@@ -222,10 +222,29 @@ export async function placeCashOrderAction(
   });
 
   if (error) {
-    console.error("[placeCashOrderAction] Database order creation failed", {
-      code: error.code,
-      message: error.message,
-    });
+    if (process.env.NODE_ENV === "development") {
+      console.error("[placeCashOrderAction] Development Diagnostics for failed RPC:", {
+        functionName: "create_cash_order",
+        parameters: {
+          p_shop_id: shopId,
+          p_items: items.map((i) => ({
+            menu_item_id: i.menu_item_id,
+            quantity: i.quantity,
+          })),
+        },
+        supabaseError: {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        },
+      });
+    } else {
+      console.error("[placeCashOrderAction] Database order creation failed", {
+        code: error.code,
+        message: error.message,
+      });
+    }
 
     const msg = error.message.toLowerCase();
     if (msg.includes("insufficient stock")) {
@@ -256,6 +275,13 @@ export async function placeCashOrderAction(
       return {
         success: false,
         error: "Only registered customer accounts can place orders.",
+      };
+    }
+
+    if (process.env.NODE_ENV === "development") {
+      return {
+        success: false,
+        error: `Could not complete order. Database error: ${error.message} (Code: ${error.code}). Details: ${error.details || "None"}. Hint: ${error.hint || "None"}.`,
       };
     }
 
