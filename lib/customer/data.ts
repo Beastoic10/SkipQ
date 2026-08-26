@@ -142,3 +142,63 @@ export async function getApprovedShop(shopId: string, cafeteriaId: string): Prom
   if (!data) notFound();
   return data;
 }
+
+export type CustomerMenuItem = {
+  id: string;
+  shop_id: string;
+  name: string;
+  description: string | null;
+  price: number;
+  image_path: string | null;
+  stock_quantity: number;
+  max_quantity_per_order: number;
+  is_manually_available: boolean;
+  is_active: boolean;
+  reserved_quantity: number;
+  available_stock: number;
+};
+
+export async function getShopMenuItems(shopId: string): Promise<DataResult<CustomerMenuItem>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("menu_items")
+    .select("id, shop_id, name, description, price, image_path, stock_quantity, max_quantity_per_order, is_manually_available, is_active")
+    .eq("shop_id", shopId)
+    .eq("is_active", true)
+    .order("name", { ascending: true });
+
+  if (error) {
+    return { data: [], error: getQueryErrorMessage("Menu items lookup", error.message) };
+  }
+
+  const rawItems = data ?? [];
+  const itemsWithStock: CustomerMenuItem[] = await Promise.all(
+    rawItems.map(async (item) => {
+      const { data: reserved, error: rpcError } = await supabase.rpc(
+        "active_reserved_quantity",
+        { p_menu_item_id: item.id }
+      );
+      const reservedQty = rpcError ? 0 : Number(reserved ?? 0);
+      const stockQty = Number(item.stock_quantity ?? 0);
+      const availableStock = Math.max(0, stockQty - reservedQty);
+
+      return {
+        id: item.id,
+        shop_id: item.shop_id,
+        name: item.name,
+        description: item.description,
+        price: Number(item.price),
+        image_path: item.image_path,
+        stock_quantity: stockQty,
+        max_quantity_per_order: Number(item.max_quantity_per_order),
+        is_manually_available: Boolean(item.is_manually_available),
+        is_active: Boolean(item.is_active),
+        reserved_quantity: reservedQty,
+        available_stock: availableStock,
+      };
+    })
+  );
+
+  return { data: itemsWithStock, error: null };
+}
+

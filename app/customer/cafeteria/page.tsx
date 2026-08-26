@@ -43,7 +43,7 @@ export default async function CafeteriaSelectionPage({ searchParams }: Cafeteria
                 <li key={cafeteria.id}>
                   <Link href={`/customer/shop?universityId=${encodeURIComponent(university.id)}&cafeteriaId=${encodeURIComponent(cafeteria.id)}`} className="block rounded-3xl border border-orange-100 bg-orange-50/70 p-5 transition hover:border-orange-300 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-600 focus:ring-offset-2">
                     <span className="text-lg font-semibold text-zinc-950">{cafeteria.name}</span>
-                    <span className="mt-2 block text-sm text-zinc-600">Choose shops in this cafeteria.</span>
+                    <span className="mt-2 block text-sm text-zinc-600">View menu or choose sales point.</span>
                   </Link>
                 </li>
               ))}

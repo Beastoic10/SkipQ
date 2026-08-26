@@ -22,7 +22,7 @@ export default async function CustomerHomePage() {
 
         <div className="rounded-3xl bg-orange-50 p-5 sm:p-6">
           <h2 className="text-xl font-semibold text-zinc-950">Ready to order?</h2>
-          <p className="mt-2 text-sm leading-6 text-zinc-600">Menu browsing, carts, payments, and QR collection will be added in later milestones.</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">Browse live cafeteria menus, check remaining stock, and explore available items.</p>
           <Link
             href="/customer/university"
             className="mt-5 inline-flex rounded-full bg-orange-600 px-5 py-3 font-semibold text-white transition hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-600 focus:ring-offset-2"
