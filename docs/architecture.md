@@ -5,8 +5,8 @@
 SkipQ is a cafeteria ordering and queue-management application for universities. The first release must support three roles:
 
 - **Customer**: places orders, pays by cash or configured online payment, receives an immediate collection QR after a successful order/payment, tracks order progress, and physically collects food using the QR credential.
-- **Shop/Sales Terminal staff**: manages menu items, inventory, incoming orders, order statuses, staff-authorized cancellations, QR scanning, and customer collection.
-- **Admin**: manages universities, cafeterias, shops, shop approvals, staff assignments, users, roles, and basic system visibility.
+- **Shop/Sales Terminal**: represents physical sales points (outlets/counters), not individual human staff. Each physical shop/outlet has its own Supabase Auth terminal account. Anyone operating that physical terminal device uses its account. Manages menu items, inventory, incoming orders, order statuses, terminal-authorized cancellations, QR scanning, and customer collection.
+- **Admin**: manages universities, cafeterias, shops, shop approvals, terminal account onboarding, users, roles, and basic system visibility.
 
 The customer experience should be mobile-first, food-focused, rounded, card-based, and warm. The reference UI should influence the design language without being copied literally.
 
@@ -26,7 +26,7 @@ The customer experience should be mobile-first, food-focused, rounded, card-base
 ### Supabase platform
 
 - **Supabase Auth**: account identity and session management.
-- **Supabase PostgreSQL**: system of record for users, campus data, shops, menus, inventory, orders, payments, QR credentials, and audit events.
+- **Supabase PostgreSQL**: system of record for users, campus data, shops, terminal accounts, menus, inventory, orders, payments, QR credentials, and audit events.
 - **Supabase Row Level Security (RLS)**: mandatory access control on tenant/user-scoped data.
 - **Supabase Realtime**: scoped subscriptions for customer order updates and shop terminal incoming/relevant order changes.
 - **Supabase Storage**: menu item images and shop/cafeteria media where appropriate.
@@ -34,17 +34,17 @@ The customer experience should be mobile-first, food-focused, rounded, card-base
 
 ### Domain modules
 
-- `auth`: session handling, role checks, and profile loading.
+- `auth`: session handling, role checks, profile loading, and terminal authentication.
 - `universities`: university selection and admin management.
 - `cafeterias`: food vendor/business/brand listing, active/approval state, and university association.
-- `shops`: physical outlet/sales-point profile, approval, operational status, and staff membership. Customer UI should usually call these “Sales Points” or “Locations” rather than exposing the internal `shops` table name.
+- `shops`: physical outlet/sales-point profile, approval, operational status, and terminal account association (`terminal_accounts`). Customer UI should usually call these “Sales Points” or “Locations” rather than exposing the internal `shops` table name.
 - `menu`: outlet-specific item details, pricing, images, manual availability, and max quantity per order.
 - `inventory`: stock quantity, atomic consumption, stock reservations, release/expiry, and inventory audit metadata.
 - `cart`: in-progress customer cart and quantity UX; not a security boundary.
 - `orders`: order creation/finalization, order items, status lifecycle, order history, and status events.
 - `payments`: payment attempts, CASH/ONLINE methods, SSLCOMMERZ integration boundaries, payment states, and refund-ready data model.
 - `qr-collection`: opaque collection token generation, QR display, validation, use tracking, and collection audit.
-- `admin`: system visibility, approvals, staff assignment, users, and role management.
+- `admin`: system visibility, approvals, terminal account onboarding, users, and role management.
 
 ## 3. Customer flow
 
@@ -81,7 +81,7 @@ University
 
 A cafeteria/vendor may have exactly one customer-visible sales point or multiple customer-visible sales points. The selected sales point must always be represented internally because it determines the menu, stock, order destination, terminal ownership, staff authorization, QR validation boundary, and realtime scope.
 
-Customers must not have a self-service cancellation button. If a customer wants to cancel, they must physically contact the sales terminal, and an authorized shop staff member must perform the cancellation if the order is eligible.
+Customers must not have a self-service cancellation button. If a customer wants to cancel, they must physically contact the physical sales terminal, and the terminal operator must perform the cancellation if the order is eligible.
 
 ## 4. Database entities and relationships
 
@@ -90,19 +90,31 @@ This section describes the approved domain model. It is not a migration specific
 ### Identity and authorization
 
 - `profiles`
-  - One row per Supabase Auth user.
-  - Owns customer-facing profile metadata.
+  - One row per Supabase Auth user (customers, admins, and terminal accounts).
+  - Owns profile metadata.
   - Related to `auth.users` by `id`.
 - `roles`
-  - Controlled roles: `customer`, `shop_staff`, `admin`.
+  - Controlled roles: `customer`, `terminal` (or `shop_terminal`), `admin`.
 - `user_roles`
-  - Many-to-many relationship between users and roles.
+  - Many-to-many relationship between users/terminals and roles.
   - Enables explicit role grants and revocation.
+- `terminal_accounts`
+  - Maps a Supabase Auth terminal account (`auth_user_id`) directly to exactly one physical shop/outlet (`shop_id`).
+  - Represents physical sales points, not individual human staff members. Anyone operating that physical terminal device uses its account.
+  - Fields: `auth_user_id`, `shop_id`, `display_name`, `is_active`, timestamps.
+  - Conceptually: `terminal_account → auth_user_id → shop_id → display_name → is_active`. One terminal account belongs to exactly one physical shop/outlet.
 - `shop_staff_memberships`
-  - Links staff users to one or more physical shops/sales points.
-  - Defines the sales-point boundary for terminal data access and staff operations.
-  - Staff authorization must be checked against the specific sales point associated with orders, menu items, inventory, and QR collection; belonging to the same cafeteria/vendor is not sufficient.
-  - Should include approval/active state and timestamps.
+  - **Removed from active MVP model**: replaced by `terminal_accounts` for direct physical terminal identification. Individual salesman accounts are not required for MVP. (May remain in documentation as an optional extension for future individual staff functionality).
+
+### Onboarding flow
+
+Terminal accounts are NOT self-registered.
+
+Admin onboarding flow:
+```text
+Admin → select University → select Cafeteria → select Shop → create Terminal Account → Terminal logs in
+```
+The admin creates the terminal account in Supabase Auth, assigns the `terminal` role, creates the `terminal_accounts` link to the physical shop, and provides credentials to the physical sales point.
 
 ### Campus, vendors, and sales points
 
@@ -364,33 +376,32 @@ The same screen should clearly indicate readiness when the order becomes `READY`
 
 ### QR validation
 
-When staff scans a QR code:
+When a terminal scans a QR code:
 
 1. Decode the opaque token.
 2. Send the token to trusted backend logic.
 3. Validate the token hash and expiry/use state.
 4. Find the associated order.
-5. Verify the staff member belongs to the exact physical sales point/shop that owns the order.
+5. Verify the authenticated terminal's associated shop matches the order's shop (`v_order.shop_id = v_terminal_shop_id`). Never trust a shop ID supplied by the client.
 6. Verify the order is `READY` and eligible for collection.
 7. Verify the QR has not already been used.
 8. Atomically mark the order as `COLLECTED`.
 9. Mark the QR token as used.
-10. Record collection timestamp and staff member.
+10. Record collection timestamp and authenticated terminal identity (`collected_by = terminal_auth_id`).
 
-The client must never directly mark an order as collected. Reused QR tokens, QR tokens for another physical sales point/shop, and QR tokens for orders that are not ready must fail validation. For example, Toua's Kitchen Ground Floor staff may validate Ground Floor orders, but Toua's Kitchen 3rd Floor staff may not validate those QR codes merely because both sales points belong to the same cafeteria/vendor.
+The client must never directly mark an order as collected. Reused QR tokens, QR tokens scanned by a terminal belonging to another physical sales point/shop, and QR tokens for orders that are not ready must fail validation. For example, Toua's Kitchen Ground Floor terminal may validate Ground Floor orders, but Toua's Kitchen 1st Floor terminal may not validate those QR codes merely because both sales points belong to the same cafeteria/vendor.
 
 ## 9. Cancellation lifecycle
 
 There is no customer-facing cancellation functionality. Customers must physically contact the sales terminal.
 
-Only authorized shop staff can cancel an eligible order. The cancellation operation must atomically:
+Cancellation is performed by the authenticated terminal account for that physical shop. The cancellation operation must atomically:
 
-- Verify staff authentication and authorization.
-- Verify staff membership in the exact physical sales point/shop that owns the order.
-- Verify the order is in a cancellable state.
-- Apply business rules for `PLACED` and `PREPARING` cancellation.
+- Verify terminal authentication and active status (`is_active_terminal`).
+- Verify the terminal belongs to the exact physical sales point/shop that owns the order.
+- Verify the order is in a cancellable state (`PLACED` or eligible `PREPARING`).
 - Record cancellation timestamp.
-- Record cancelling staff member.
+- Record the authenticated terminal identity (`cancelled_by = terminal_auth_id`), not an individual salesman.
 - Record cancellation reason.
 - Update order status to `CANCELLED`.
 - Create an order status event.
@@ -401,15 +412,15 @@ For orders whose inventory can safely be returned, restore the appropriate quant
 
 ## 10. Shop terminal requirements
 
-The shop terminal should be optimized for tablet/desktop sales terminal use while remaining responsive. Staff must be able to:
+The shop terminal represents a physical sales point (counter/outlet) rather than individual staff members. It operates using its dedicated Supabase Auth terminal account. The terminal interface should be optimized for tablet/desktop sales terminal use while remaining responsive. The terminal account can:
 
-- View incoming orders.
+- View incoming orders for its physical shop.
 - Filter orders.
 - View order details.
-- Move orders through valid statuses.
-- Cancel eligible orders.
+- Move orders through valid statuses (`PLACED → PREPARING → READY → COLLECTED`).
+- Cancel eligible orders for its shop.
 - Provide cancellation reasons.
-- Manage menu items.
+- Manage menu items for its shop.
 - Update prices.
 - Update stock quantities.
 - Change manual availability.
@@ -423,8 +434,10 @@ The shop terminal should be optimized for tablet/desktop sales terminal use whil
 Supabase RLS is mandatory.
 
 - Customers can browse approved public menu data, access their own orders, and access their own collection information.
-- Shop staff can access only their assigned physical sales point/shop operational data; cafeteria/vendor-level affiliation alone does not authorize operational access.
-- Admins can access authorized administrative data for universities, cafeterias, shops, staff assignments, users, roles, approvals, and system visibility.
+- Terminal accounts can access only their assigned physical sales point/shop operational data; cafeteria/vendor-level affiliation alone does not authorize operational access. A terminal account may only access its own shop's orders, menu/inventory operations, QR collection, cancellations, and realtime events (e.g. Ground Floor terminal cannot operate 3rd Floor orders).
+- Admins can access authorized administrative data for universities, cafeterias, shops, terminal account onboarding, users, roles, approvals, and system visibility.
+
+**Never trust a shop ID supplied by the client.** Terminal access is determined strictly by `authenticated terminal account -> associated shop`. Trusted database logic and RLS must derive the terminal's shop ID directly from `auth.uid()`.
 
 Privileged operations must not rely only on client-side checks. Use trusted server-side logic and/or database functions for:
 
@@ -437,7 +450,7 @@ Privileged operations must not rely only on client-side checks. Use trusted serv
 - QR validation and collection.
 - Payment initiation and confirmation.
 - Refund processing state changes.
-- Role and permission changes.
+- Role and terminal account management.
 - Administrative operations.
 
 Never expose Supabase service-role credentials, SSLCOMMERZ credentials, or payment secrets to browsers or Capacitor clients.
@@ -451,7 +464,7 @@ Realtime is required for:
 - Shop terminal incoming orders.
 - Shop terminal relevant order changes.
 
-Subscriptions must be scoped to the relevant customer, order, or physical sales point/shop. Do not broadcast every system order to every connected user. Terminal screens should subscribe only to assigned sales-point orders and relevant active statuses. Multiple sales points under the same cafeteria/vendor must not receive one another's order feeds unless a later explicit business rule authorizes a shared operational view.
+Subscriptions must be scoped to the relevant customer, order, or physical sales point/shop (`shop_id`). Do not broadcast every system order to every connected user. Terminal screens should subscribe only to their assigned sales-point orders (`shop_id = get_terminal_shop_id(auth.uid())`) and relevant active statuses. Multiple sales points under the same cafeteria/vendor must not receive one another's order feeds unless a later explicit business rule authorizes a shared operational view.
 
 ## 13. MVP production pilot scope
 
@@ -476,16 +489,16 @@ Subscriptions must be scoped to the relevant customer, order, or physical sales 
 
 ### Shop/Sales Terminal
 
-- Authentication.
+- Terminal authentication (dedicated Supabase Auth terminal account per physical sales point).
 - Sales-point dashboard.
-- Incoming orders scoped to assigned sales points.
-- Order status management.
+- Incoming orders scoped strictly to the assigned sales point.
+- Order status management (`PLACED → PREPARING → READY → COLLECTED`).
 - Menu management.
 - Price updates.
 - Stock management.
 - Manual availability management.
 - Maximum quantity management.
-- Staff-authorized cancellation.
+- Terminal-authorized cancellation.
 - QR scanning.
 - Collection validation.
 
@@ -496,7 +509,7 @@ Subscriptions must be scoped to the relevant customer, order, or physical sales 
 - Cafeteria management.
 - Shop management.
 - Shop approval.
-- Staff assignment.
+- Terminal account onboarding (`Admin → select shop → create terminal account`).
 - User and role management.
 - Basic system visibility.
 
@@ -506,7 +519,7 @@ Do not add unrelated features such as reviews, loyalty programs, promotions, adv
 
 - Index foreign keys and common filters for universities, cafeterias, shops, customers, orders, order statuses, payment statuses, and active reservations.
 - Scope customer order queries to authenticated user IDs.
-- Scope terminal queries and realtime subscriptions to assigned physical sales point/shop IDs.
+- Scope terminal queries and realtime subscriptions to assigned physical sales point/shop IDs (`terminal_accounts`).
 - Use atomic database functions or transactions for order creation, inventory reservation, inventory consumption, cancellation, and collection.
 - Keep append-only status events for auditability without overloading active order queries.
 - Store price snapshots on `order_items` to keep historical orders stable after menu changes.
@@ -516,11 +529,15 @@ Do not add unrelated features such as reviews, loyalty programs, promotions, adv
 
 ## 15. Database impact and remaining product decisions
 
-The current database terminology can remain unchanged: `cafeterias` should be interpreted as cafeteria vendors/businesses/brands, and `shops` should be interpreted as physical outlets/sales points/locations. The existing relationship from `shops.cafeteria_id` to `cafeterias.id` already supports one or many sales points per cafeteria/vendor. The existing `menu_items.shop_id`, `orders.shop_id`, `shop_staff_memberships.shop_id`, QR validation, cancellation, and status-update rules already keep menus, stock, orders, staff authorization, QR collection, and realtime boundaries scoped to the physical sales point. No structural database change is required for this finalized model.
+The database model is updated for terminal authentication:
+- `terminal_accounts` is introduced as the table linking a Supabase Auth account (`auth_user_id`) directly to a physical shop (`shop_id`).
+- `shop_staff_memberships` is removed from active MVP operations in favor of direct terminal account identity (`terminal_accounts`). Individual salesman accounts are not required for MVP.
+- `roles` includes `terminal` (or `shop_terminal`) representing physical terminal accounts.
+- Database functions (`cancel_order`, `validate_collection_qr`, `update_order_status`, `adjust_menu_item_stock`) and RLS policies resolve terminal authorization server-side from `auth.uid()` via `terminal_accounts`, ensuring client-supplied shop IDs are never trusted.
 
 Customer Foundation 4A should be updated in a later application milestone so selecting a cafeteria/vendor counts only active, approved shops: zero shows unavailable, one skips Sales Point selection and opens that sales point's menu, and two or more shows Sales Point/Location selection.
 
-The final requirements resolve the major previous ambiguities around payment methods, order statuses, QR timing, inventory, reservations, max quantity, cancellation ownership, and single-sales-point order ownership. Remaining decisions before implementation are:
+The final requirements resolve the major previous ambiguities around payment methods, order statuses, QR timing, inventory, reservations, max quantity, cancellation ownership, terminal authentication, and single-sales-point order ownership. Remaining decisions before implementation are:
 
 - Exact timeout duration for online payment reservations and QR token expiry.
 - Exact operational rule for when `PREPARING → CANCELLED` is allowed and whether stock can be restored for specific item categories.

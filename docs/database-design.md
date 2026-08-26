@@ -7,20 +7,21 @@ This document proposes the PostgreSQL/Supabase data model for the SkipQ MVP. It 
 The design supports:
 
 - Customer authentication profiles, university/cafeteria-vendor/sales-point selection, menu browsing for the selected physical sales point, inventory-aware ordering, cash/online payment selection, order tracking, order history, and immediate QR collection credentials after successful order acceptance/finalization.
-- Shop/Sales Terminal staff membership for physical sales points, outlet-specific menu management, price and stock management, manual availability, maximum quantity per order, incoming orders, valid order status updates, authorized cancellation, QR validation, and collection.
-- Admin management of universities, cafeteria vendors, physical shops/sales points, approvals, staff assignments, users, roles, and basic system visibility.
+- Shop/Sales Terminal authentication for physical sales points, outlet-specific menu management, price and stock management, manual availability, maximum quantity per order, incoming orders, valid order status updates, authorized cancellation, QR validation, and collection.
+- Admin management of universities, cafeteria vendors, physical shops/sales points, approvals, terminal account onboarding, users, roles, and basic system visibility.
 
 The database is designed for approximately 10,000 registered users, with shop-scoped operational queries, customer-scoped history queries, and tightly scoped realtime subscriptions.
 
 ### Core design choices
 
 1. **Single-sales-point orders only for MVP**: each order belongs to exactly one physical shop/sales point. This keeps inventory, terminal authorization, payment, QR validation, and cancellation ownership clear. A cafeteria/vendor may have one or multiple sales points, but an order never spans more than one of them.
-2. **Supabase Auth remains the identity provider**: `profiles.id` corresponds to `auth.users.id`; application roles are assigned explicitly through database rows, not trusted client claims.
+2. **Supabase Auth remains the identity provider**: `profiles.id` corresponds to `auth.users.id`. Physical sales points use dedicated Supabase Auth terminal accounts mapped directly to physical shops via `terminal_accounts`. Application roles are assigned explicitly through database rows (`user_roles`), not trusted client claims.
 3. **Payment state is separate from order state**: `orders.status` tracks food/order fulfillment; `payment_attempts.status` tracks payment state.
 4. **One `payment_attempts` table is enough for MVP**: it can represent minimal cash payment records and multiple online attempts per order without a separate parent `payments` table.
 5. **Inventory is sales-point specific and uses physical stock plus active reservations**: `menu_items.stock_quantity` represents physical on-hand stock not yet permanently consumed. Available stock is `stock_quantity - active_reserved_quantity`. Cash orders decrement `stock_quantity` atomically. Online payments reserve first, then decrement stock and consume the reservation only after trusted SSLCOMMERZ confirmation.
 6. **QR codes are opaque collection credentials**: the QR payload contains only an unpredictable token; the database stores only a hashed token lookup value.
-7. **Privileged operations are transactional**: order creation, reservation, payment finalization, cancellation, QR generation/validation, and role assignment require PostgreSQL functions, Edge Functions, or server-side logic rather than direct client mutations.
+7. **Privileged operations are transactional**: order creation, reservation, payment finalization, cancellation, QR generation/validation, and role/terminal management require PostgreSQL functions, Edge Functions, or server-side logic rather than direct client mutations.
+8. **Terminal identity belongs directly to the physical shop**: `terminal_accounts` links an `auth_user_id` to a single `shop_id`. `shop_staff_memberships` is removed from active MVP operations in favor of this simpler model.
 
 ## 2. Entity list
 
@@ -29,7 +30,7 @@ The database is designed for approximately 10,000 registered users, with shop-sc
 - `profiles`
 - `roles`
 - `user_roles`
-- `shop_staff_memberships`
+- `terminal_accounts`
 
 ### Campus, vendors, and sales points
 
@@ -66,8 +67,8 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
-| `id` | `uuid` | No | Primary key; foreign key to `auth.users.id` on delete cascade/restrict per auth policy | Application profile for a Supabase Auth user. |
-| `display_name` | `text` | Yes | Trimmed; length limit recommended | User-visible name. |
+| `id` | `uuid` | No | Primary key; foreign key to `auth.users.id` on delete cascade/restrict per auth policy | Application profile for a Supabase Auth user (customer, admin, or terminal account). |
+| `display_name` | `text` | Yes | Trimmed; length limit recommended | User or terminal display name. |
 | `phone` | `text` | Yes | Unique if phone login/verification is required later | Optional contact phone. |
 | `avatar_url` | `text` | Yes | Storage path or external URL policy | Optional profile image reference. |
 | `is_active` | `boolean` | No | Default `true` | Allows administrative disabling without deleting auth history. |
@@ -79,7 +80,7 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
 | `id` | `smallint` | No | Primary key | Compact role identifier. |
-| `name` | `role_name` enum or `text` | No | Unique; allowed values `customer`, `shop_staff`, `admin` | Explicit application role. |
+| `name` | `role_name` enum or `text` | No | Unique; allowed values `customer`, `terminal` (or `shop_terminal`), `admin` | Explicit application role. |
 | `description` | `text` | Yes | | Human-readable role description. |
 | `created_at` | `timestamptz` | No | Default `now()` | Audit timestamp. |
 
@@ -90,7 +91,7 @@ Types are proposed PostgreSQL/Supabase types. Exact SQL syntax will be defined l
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
 | `id` | `uuid` | No | Primary key | Role assignment row. |
-| `user_id` | `uuid` | No | Foreign key to `profiles.id` | User receiving the role. |
+| `user_id` | `uuid` | No | Foreign key to `profiles.id` | User or terminal receiving the role. |
 | `role_id` | `smallint` | No | Foreign key to `roles.id` | Assigned role. |
 | `is_active` | `boolean` | No | Default `true` | Enables revocation without deleting audit history. |
 | `assigned_by` | `uuid` | Yes | Foreign key to `profiles.id` | Admin/system actor granting the role. |
@@ -148,19 +149,21 @@ A `shop` represents a physical outlet, sales point, or location belonging to a c
 | `created_at` | `timestamptz` | No | Default `now()` | Creation timestamp. |
 | `updated_at` | `timestamptz` | No | Default `now()` | Update timestamp. |
 
-### TABLE: shop_staff_memberships
+### TABLE: terminal_accounts
 
 | Column | Type | Nullable | Constraints | Purpose |
 | ------ | ---- | -------- | ----------- | ------- |
-| `id` | `uuid` | No | Primary key | Membership identifier. |
-| `shop_id` | `uuid` | No | Foreign key to `shops.id` | Physical sales point/shop the staff member can operate. |
-| `user_id` | `uuid` | No | Foreign key to `profiles.id` | Staff user. |
-| `is_active` | `boolean` | No | Default `true` | Enables activation/deactivation. |
-| `assigned_by` | `uuid` | Yes | Foreign key to `profiles.id` | Admin/system actor assigning staff. |
+| `id` | `uuid` | No | Primary key | Terminal account identifier. |
+| `auth_user_id` | `uuid` | No | Unique; foreign key to `profiles.id` | Supabase Auth account operating this physical terminal. |
+| `shop_id` | `uuid` | No | Foreign key to `shops.id` | The single physical shop/outlet this terminal account operates. |
+| `display_name` | `text` | No | Non-empty | Terminal display name, e.g. "Ground Floor Terminal". |
+| `is_active` | `boolean` | No | Default `true` | Enables administrative activation/deactivation of terminal access. |
 | `created_at` | `timestamptz` | No | Default `now()` | Assignment timestamp. |
 | `updated_at` | `timestamptz` | No | Default `now()` | Update timestamp. |
 
-A user must have an active `shop_staff` role and an active `shop_staff_memberships` row for a specific physical sales point/shop to operate that sales point. Membership in one sales point does not authorize another sales point owned by the same cafeteria/vendor.
+Each physical shop/outlet has its own Supabase Auth terminal account. One terminal account belongs to exactly one shop/outlet. Anyone operating that physical terminal device uses its account.
+
+Note on `shop_staff_memberships`: `shop_staff_memberships` is **removed from the active MVP data model** to achieve the simplest MVP model: terminal identity belongs directly to the physical shop. Individual salesman accounts are not required for MVP. (If individual staff shift tracking or accountability is required post-MVP, `shop_staff_memberships` or staff pin entry can be reintroduced).
 
 ### TABLE: menu_items
 
@@ -307,9 +310,9 @@ Supabase auth.users
 
 profiles
 → has many user_roles
-→ has many shop_staff_memberships
+→ has one terminal_accounts (for terminal accounts)
 → has many orders as customer
-→ may act in order_status_events, cancellations, and collection validation
+→ may act in order_status_events, cancellations, and collection validation as terminal account
 
 roles
 → has many user_roles
@@ -318,11 +321,15 @@ University
 → has many Cafeterias
 → Cafeteria has many Shops
 → Shop has many Menu Items
-→ Shop has many Staff Memberships
+→ Shop has one or more Terminal Accounts
 → Shop has many Orders
 
 Customer/Profile
 → has many Orders
+
+Terminal Account
+→ belongs to exactly one Shop
+→ operates orders, menu, cancellations, QR collection for that Shop
 
 Order
 → belongs to exactly one University
@@ -344,7 +351,7 @@ Payment Attempt
 
 Collection Code
 → belongs to one Order
-→ is validated by one Staff/Profile when used
+→ is validated by Terminal Account when used
 ```
 
 ### Ownership boundaries
@@ -352,7 +359,7 @@ Collection Code
 - A cafeteria is owned by exactly one university.
 - A shop is owned by exactly one cafeteria.
 - A menu item is owned by exactly one shop.
-- A staff member can operate only shops with an active `shop_staff_memberships` row and active `shop_staff` role.
+- A terminal account can operate only its assigned physical shop (`shops.id`) linked via `terminal_accounts`. One terminal account belongs to exactly one shop.
 - An order belongs to exactly one shop for MVP; multi-shop carts/orders are intentionally out of scope.
 
 ## 5. Enums and statuses
@@ -360,7 +367,7 @@ Collection Code
 ### `role_name`
 
 - `customer`
-- `shop_staff`
+- `terminal` (or `shop_terminal`)
 - `admin`
 
 ### `approval_status`
@@ -427,13 +434,13 @@ This is intentionally minimal and refund-ready. It does not implement automated 
 - `profiles.id` → `auth.users.id`
 - `user_roles.user_id` → `profiles.id`
 - `user_roles.role_id` → `roles.id`
+- `terminal_accounts.auth_user_id` → `profiles.id`
+- `terminal_accounts.shop_id` → `shops.id`
 - `universities.created_by` → `profiles.id`
 - `cafeterias.university_id` → `universities.id`
 - `cafeterias.created_by`, `cafeterias.approved_by` → `profiles.id`
 - `shops.cafeteria_id` → `cafeterias.id`
 - `shops.owner_profile_id`, `shops.created_by`, `shops.approved_by` → `profiles.id`
-- `shop_staff_memberships.shop_id` → `shops.id`
-- `shop_staff_memberships.user_id`, `shop_staff_memberships.assigned_by` → `profiles.id`
 - `menu_items.shop_id` → `shops.id`
 - `orders.customer_id`, `orders.cancelled_by`, `orders.collected_by` → `profiles.id`
 - `orders.university_id` → `universities.id`
@@ -459,6 +466,7 @@ This is intentionally minimal and refund-ready. It does not implement automated 
 - `cafeterias(university_id, slug)` unique.
 - `shops(cafeteria_id, name)` unique.
 - `shops(cafeteria_id, slug)` unique.
+- `terminal_accounts.auth_user_id` unique.
 - `orders.order_number` unique.
 - `payment_attempts.transaction_ref` unique.
 - `payment_attempts.gateway_session_id` unique where not null.
@@ -466,7 +474,7 @@ This is intentionally minimal and refund-ready. It does not implement automated 
 - `collection_codes.token_hash` unique.
 - `collection_codes.order_id` unique for MVP.
 - `user_roles(user_id, role_id)` unique for active role rows, preferably partial where `is_active = true`.
-- `shop_staff_memberships(shop_id, user_id)` unique for active memberships, preferably partial where `is_active = true`.
+- `terminal_accounts(shop_id, auth_user_id)` unique for active terminal accounts, preferably partial where `is_active = true`.
 - At most one `PAID` payment attempt per order, with a partial unique index on `payment_attempts(order_id)` where `status = 'PAID'`.
 
 ### Check constraints
@@ -497,8 +505,8 @@ A check constraint can restrict valid enum values, but state transition rules re
 - `profiles(id)` primary key.
 - `user_roles(user_id, is_active)` for role checks.
 - `user_roles(role_id, is_active)` for admin visibility by role.
-- `shop_staff_memberships(user_id, is_active)` for staff → shops lookup.
-- `shop_staff_memberships(shop_id, is_active)` for shop staff management.
+- `terminal_accounts(auth_user_id, is_active)` for terminal → shop lookup.
+- `terminal_accounts(shop_id, is_active)` for shop terminal management.
 
 ### Campus/shop browsing
 
@@ -535,44 +543,44 @@ A check constraint can restrict valid enum values, but state transition rules re
 
 ## 8. RLS policy design
 
-RLS should be enabled on all application tables. Policies below are conceptual and should be implemented with helper functions such as `is_admin(auth.uid())`, `has_role(auth.uid(), role_name)`, and `is_active_shop_staff(auth.uid(), shop_id)`.
+RLS should be enabled on all application tables. Policies below are conceptual and should be implemented with helper functions such as `is_admin(auth.uid())`, `has_role(auth.uid(), role_name)`, `get_terminal_shop_id(auth.uid())`, and `is_active_terminal(auth.uid(), shop_id)`.
 
 ### How RLS determines roles and shop membership
 
 - A user is a **customer** if they have an active `user_roles` row for `customer`.
-- A user is **shop staff** if they have an active `user_roles` row for `shop_staff`.
-- A user's authorized shops are the active `shop_staff_memberships.shop_id` rows for that user, ideally requiring both active membership and active `shop_staff` role.
+- A user/account is a **terminal** if they have an active `user_roles` row for `terminal` (or `shop_terminal`) and an active `terminal_accounts` row linking `auth_user_id` to `shop_id`.
+- A terminal account's authorized shop is resolved server-side via `get_terminal_shop_id(auth.uid())`. Client-supplied shop IDs are never trusted.
 - A user is an **admin** if they have an active `user_roles` row for `admin`.
-- Client-supplied role claims are never authoritative.
+- Client-supplied role claims and client-supplied shop IDs are never authoritative.
 
 ### Public/customer-readable campus data
 
 - `universities`: authenticated users can read active universities; admins can manage all.
 - `cafeterias`: authenticated users can read active and approved cafeteria vendors under active universities; admins can manage all.
-- `shops`: authenticated users can read active and approved physical sales points under active/approved cafeteria vendors; assigned staff can read their sales points; admins can manage all.
-- `menu_items`: authenticated users can read active menu items for active/approved physical sales points; assigned staff can manage menu items for their assigned sales points; admins can read/manage as authorized. Customer navigation should count only active/approved sales points: zero shows unavailable, one skips selection and opens the menu, two or more shows Sales Point/Location selection.
+- `shops`: authenticated users can read active and approved physical sales points under active/approved cafeteria vendors; assigned terminal accounts can read their physical shop data; admins can manage all.
+- `menu_items`: authenticated users can read active menu items for active/approved physical sales points; assigned terminals can manage menu items for their shop (`shop_id = get_terminal_shop_id(auth.uid())`); admins can read/manage as authorized. Customer navigation should count only active/approved sales points: zero shows unavailable, one skips selection and opens the menu, two or more shows Sales Point/Location selection.
 
 ### Customer data policies
 
 - `profiles`: users can read/update their own profile fields; admins can manage profiles.
-- `orders`: customers can read their own orders; customers should not directly insert/update orders outside trusted order functions; staff can read shop orders; admins can read authorized data.
-- `order_items`: customers can read items for their own orders; staff can read items for assigned sales-point orders; writes only through trusted order functions.
-- `order_status_events`: customers can read events for their own orders; staff can read events for assigned sales-point orders; inserts only through trusted status/cancellation/collection functions.
-- `payment_attempts`: customers can read sanitized payment attempts for their own orders; staff can read necessary payment state for assigned sales-point orders; gateway-sensitive metadata may require server-only access or restricted columns/views.
-- `collection_codes`: customers can read enough data to display their own QR token only if the raw token is returned at generation time or kept in a secure client state. The table stores only `token_hash`, so direct customer reads should avoid exposing hashes. Staff cannot directly update collection rows; validation uses trusted logic.
+- `orders`: customers can read their own orders; customers should not directly insert/update orders outside trusted order functions; terminals can read shop orders (`shop_id = get_terminal_shop_id(auth.uid())`); admins can read authorized data.
+- `order_items`: customers can read items for their own orders; terminals can read items for their shop's orders; writes only through trusted order functions.
+- `order_status_events`: customers can read events for their own orders; terminals can read events for their shop's orders; inserts only through trusted status/cancellation/collection functions.
+- `payment_attempts`: customers can read sanitized payment attempts for their own orders; terminals can read necessary payment state for their shop's orders; gateway-sensitive metadata may require server-only access or restricted columns/views.
+- `collection_codes`: customers can read enough data to display their own QR token only if the raw token is returned at generation time or kept in a secure client state. The table stores only `token_hash`, so direct customer reads should avoid exposing hashes. Terminals cannot directly update collection rows; validation uses trusted logic.
 
-### Shop staff policies
+### Terminal policies
 
-- Staff can read/update menu items only for assigned active physical sales point/shop memberships.
-- Staff can update stock/manual availability/max quantity only for assigned sales points, preferably through trusted stock adjustment functions for auditability.
-- Staff can read and progress orders only for assigned sales points and only through valid status-update functions.
-- Staff can cancel eligible orders only through trusted cancellation logic for the order's sales point.
-- Staff can validate QR credentials only through trusted QR validation logic for the order's sales point; staff at another outlet of the same cafeteria/vendor must fail authorization.
+- Terminals can read/update menu items only for their assigned physical shop (`shop_id = get_terminal_shop_id(auth.uid())`).
+- Terminals can update stock/manual availability/max quantity only for their assigned shop, preferably through trusted stock adjustment functions (`adjust_menu_item_stock`) for auditability.
+- Terminals can read and progress orders (`PLACED → PREPARING → READY → COLLECTED`) only for their assigned shop and only through valid status-update functions.
+- Terminals can cancel eligible orders only through trusted cancellation logic (`cancel_order`) for their assigned shop.
+- Terminals can validate QR credentials only through trusted QR validation logic (`validate_collection_qr`) for their assigned shop; a terminal at another outlet of the same cafeteria/vendor must fail authorization.
 
 ### Admin policies
 
-- Admins can manage universities, cafeterias, shops, approvals, staff assignments, users, and role assignments.
-- Role assignment should still use trusted server-side/privileged logic to prevent privilege escalation and preserve audit history.
+- Admins can manage universities, cafeterias, shops, approvals, terminal account onboarding, users, and role assignments.
+- Role assignment and terminal onboarding must use trusted server-side/privileged logic to prevent privilege escalation and preserve audit history.
 
 ### Privileged operations beyond RLS
 
@@ -588,7 +596,7 @@ RLS is not sufficient for operations requiring multi-table consistency, payment 
 - Payment initiation.
 - Payment confirmation/IPN validation.
 - Refund state changes.
-- Role assignment and staff membership changes.
+- Role assignment and terminal account management.
 
 ## 9. Transactional operation design
 
@@ -638,31 +646,31 @@ These are design specifications only. No functions are implemented yet.
 
 | Aspect | Design |
 | ------ | ------ |
-| Inputs | Staff user ID from session, order ID, cancellation reason, inventory restoration decision/business-rule metadata. |
+| Inputs | Terminal auth user ID from session (`auth.uid()`), order ID, cancellation reason, inventory restoration decision/business-rule metadata. |
 | Tables affected | `orders`, `order_status_events`, `menu_items`, `payment_attempts`, possibly `inventory_reservations`. |
-| Validations | Staff has active membership for order shop; order status is `PLACED` or eligible `PREPARING`; reason is present; `READY` and `COLLECTED` cancellation rejected by default; inventory restoration allowed only if food/stock is safely restorable. |
-| Atomic operations | Transition order to `CANCELLED`; record cancellation metadata; create status event; restore stock atomically only when allowed; update payment/refund status as needed, such as `REFUND_PENDING` for paid online orders. |
-| Failure/rollback | Any invalid state, unauthorized staff, missing reason, or stock/payment update error rolls back the cancellation. |
+| Validations | Terminal is active and operates the order's shop (`is_active_terminal(v_user_id, v_order.shop_id)`); order status is `PLACED` or eligible `PREPARING`; reason is present; `READY` and `COLLECTED` cancellation rejected by default; inventory restoration allowed only if food/stock is safely restorable. Never trust a client-supplied shop ID. |
+| Atomic operations | Transition order to `CANCELLED`; record cancellation metadata (`cancelled_by = v_user_id` terminal identity); create status event; restore stock atomically only when allowed; update payment/refund status as needed, such as `REFUND_PENDING` for paid online orders. |
+| Failure/rollback | Any invalid state, unauthorized terminal, missing reason, or stock/payment update error rolls back the cancellation. |
 
 ### 9.6 Validate collection QR
 
 | Aspect | Design |
 | ------ | ------ |
-| Inputs | Staff user ID from session, raw QR token. |
+| Inputs | Terminal auth user ID from session (`auth.uid()`), raw QR token. |
 | Tables affected | `collection_codes`, `orders`, `order_status_events`. |
-| Validations | Hash token and find collection code; token not expired and unused; related order exists; staff belongs to order shop; order status is `READY`; QR belongs to same shop; no prior collection. |
-| Atomic operations | Lock collection code and order; set order `COLLECTED`, `collected_at`, `collected_by`; set collection code `used_at`, `validated_by`; create status event. |
+| Validations | Hash token and find collection code; token not expired and unused; related order exists; terminal operates order's shop (`v_order.shop_id = get_terminal_shop_id(v_user_id)`); order status is `READY`; QR belongs to same shop; no prior collection. Never trust a client-supplied shop ID. |
+| Atomic operations | Lock collection code and order; set order `COLLECTED`, `collected_at`, `collected_by = v_user_id` (terminal identity); set collection code `used_at`, `validated_by = v_user_id`; create status event. |
 | Failure/rollback | Invalid, reused, wrong-shop, expired, or not-ready QR fails with no state changes. Concurrent scans must allow only one success. |
 
 ### 9.7 Update order status
 
 | Aspect | Design |
 | ------ | ------ |
-| Inputs | Staff user ID from session, order ID, requested new status. |
+| Inputs | Terminal auth user ID from session (`auth.uid()`), order ID, requested new status. |
 | Tables affected | `orders`, `order_status_events`. |
-| Validations | Staff has active membership for order shop; transition is valid: `PLACED → PREPARING`, `PREPARING → READY`, or collection via QR function for `READY → COLLECTED`; cancellation uses cancellation function. |
+| Validations | Terminal operates order's shop (`is_active_terminal(v_user_id, v_order.shop_id)`); transition is valid: `PLACED → PREPARING`, `PREPARING → READY`, or collection via QR function for `READY → COLLECTED`; cancellation uses cancellation function. Never trust a client-supplied shop ID. |
 | Atomic operations | Lock order; update status; append status event. |
-| Failure/rollback | Invalid transition or unauthorized staff rolls back; no status event is inserted. |
+| Failure/rollback | Invalid transition or unauthorized terminal rolls back; no status event is inserted. |
 
 ## 10. Inventory concurrency strategy
 
