@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { LogoutButton } from "@/app/auth/logout-button";
 import { requireCustomer } from "@/lib/auth/session";
 
 export default async function CustomerHomePage() {
@@ -17,7 +16,6 @@ export default async function CustomerHomePage() {
               Start by choosing your university, then narrow the list to available cafeterias and shops.
             </p>
           </div>
-          <LogoutButton />
         </div>
 
         <div className="rounded-3xl bg-orange-50 p-5 sm:p-6">

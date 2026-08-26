@@ -1,22 +1,55 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import type { CustomerMenuItem } from "@/lib/customer/data";
+import type { OutletContext } from "@/lib/customer/cart-types";
+import { useCart } from "@/lib/customer/cart-context";
 
 type CustomerMenuClientProps = {
   items: CustomerMenuItem[];
+  shopId: string;
   shopName: string;
+  cafeteriaId: string;
   cafeteriaName: string;
+  universityId: string;
   universityName: string;
 };
 
 export function CustomerMenuClient({
   items,
+  shopId,
   shopName,
+  cafeteriaId,
   cafeteriaName,
+  universityId,
+  universityName,
 }: CustomerMenuClientProps) {
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const {
+    cart,
+    addItem,
+    updateQuantity,
+    getItemQuantity,
+    pendingSwitch,
+    confirmOutletSwitch,
+    cancelOutletSwitch,
+    clearCart,
+  } = useCart();
+
+  const outletContext: OutletContext = useMemo(
+    () => ({
+      university_id: universityId,
+      university_name: universityName,
+      cafeteria_id: cafeteriaId,
+      cafeteria_name: cafeteriaName,
+      shop_id: shopId,
+      shop_name: shopName,
+    }),
+    [universityId, universityName, cafeteriaId, cafeteriaName, shopId, shopName]
+  );
+
+  const isCurrentOutletInCart = cart.outlet?.shop_id === shopId;
 
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return items;
@@ -28,41 +61,38 @@ export function CustomerMenuClient({
     );
   }, [items, searchQuery]);
 
-  const handleIncrement = (item: CustomerMenuItem) => {
-    const maxAllowed = Math.min(item.available_stock, item.max_quantity_per_order);
-    if (maxAllowed <= 0 || !item.is_manually_available) return;
+  const handleAddItem = (item: CustomerMenuItem) => {
+    addItem(outletContext, item, 1);
+  };
 
-    setQuantities((prev) => {
-      const current = prev[item.id] || 0;
-      if (current >= maxAllowed) return prev;
-      return { ...prev, [item.id]: current + 1 };
-    });
+  const handleIncrement = (item: CustomerMenuItem) => {
+    if (!isCurrentOutletInCart) {
+      addItem(outletContext, item, 1);
+      return;
+    }
+
+    const currentQty = getItemQuantity(item.id);
+    const maxAllowed = Math.min(item.available_stock, item.max_quantity_per_order);
+    if (currentQty >= maxAllowed) return;
+
+    updateQuantity(item.id, 1);
   };
 
   const handleDecrement = (itemId: string) => {
-    setQuantities((prev) => {
-      const current = prev[itemId] || 0;
-      if (current <= 1) {
-        const next = { ...prev };
-        delete next[itemId];
-        return next;
-      }
-      return { ...prev, [itemId]: current - 1 };
-    });
+    if (!isCurrentOutletInCart) return;
+    updateQuantity(itemId, -1);
   };
 
-  const handleClearAll = () => {
-    setQuantities({});
-  };
+  const currentOutletItemsCount = isCurrentOutletInCart
+    ? cart.items.reduce((sum, i) => sum + i.quantity, 0)
+    : 0;
 
-  const totalItemsCount = Object.values(quantities).reduce((a, b) => a + b, 0);
-  const totalEstimatedPrice = Object.entries(quantities).reduce((sum, [id, qty]) => {
-    const item = items.find((i) => i.id === id);
-    return sum + (item ? item.price * qty : 0);
-  }, 0);
+  const currentOutletTotal = isCurrentOutletInCart
+    ? cart.items.reduce((sum, i) => sum + i.price * i.quantity, 0)
+    : 0;
 
   return (
-    <div className="space-y-6 pb-24">
+    <div className="space-y-6 pb-28">
       {/* Search and stats bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative flex-1 max-w-md">
@@ -101,6 +131,26 @@ export function CustomerMenuClient({
         </div>
       </div>
 
+      {/* Notice if user already has cart from another outlet */}
+      {cart.outlet && !isCurrentOutletInCart && cart.items.length > 0 ? (
+        <div className="flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-xs text-amber-900">
+          <div className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-200 font-bold text-amber-900">
+              !
+            </span>
+            <span>
+              Your cart has items from <strong>{cart.outlet.shop_name}</strong> ({cart.outlet.cafeteria_name}).
+            </span>
+          </div>
+          <Link
+            href="/customer/cart"
+            className="font-semibold text-orange-700 underline hover:text-orange-800"
+          >
+            View Cart
+          </Link>
+        </div>
+      ) : null}
+
       {/* Menu items list */}
       {filteredItems.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-orange-200 bg-white p-8 text-center sm:p-12">
@@ -133,7 +183,7 @@ export function CustomerMenuClient({
             const isOutOfStock = item.is_manually_available && item.available_stock <= 0;
             const isAvailable = item.is_manually_available && item.available_stock > 0;
             const maxAllowed = Math.min(item.available_stock, item.max_quantity_per_order);
-            const currentQty = quantities[item.id] || 0;
+            const currentQty = isCurrentOutletInCart ? getItemQuantity(item.id) : 0;
             const hasReachedMax = currentQty >= maxAllowed;
 
             return (
@@ -228,9 +278,9 @@ export function CustomerMenuClient({
                     currentQty === 0 ? (
                       <button
                         type="button"
-                        onClick={() => handleIncrement(item)}
+                        onClick={() => handleAddItem(item)}
                         className="flex w-full items-center justify-center gap-2 rounded-full bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-orange-700 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-600 focus:ring-offset-1"
-                        aria-label={`Add ${item.name} to selection`}
+                        aria-label={`Add ${item.name} to cart`}
                       >
                         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                           <path d="M12 5v14M5 12h14" />
@@ -296,45 +346,95 @@ export function CustomerMenuClient({
         </div>
       )}
 
-      {/* Floating Bottom Selection Summary Bar */}
-      {totalItemsCount > 0 ? (
+      {/* Floating Bottom Cart Bar */}
+      {isCurrentOutletInCart && currentOutletItemsCount > 0 ? (
         <aside
-          aria-label="Order summary preview"
+          aria-label="Active cart summary"
           className="fixed bottom-4 left-4 right-4 z-40 mx-auto max-w-2xl rounded-3xl border border-orange-200 bg-zinc-950/95 p-4 text-white shadow-xl backdrop-blur-md sm:p-5"
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
                 <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-orange-600 px-2 text-xs font-bold text-white">
-                  {totalItemsCount}
+                  {currentOutletItemsCount}
                 </span>
                 <span className="text-sm font-semibold text-zinc-200">
-                  {totalItemsCount === 1 ? "item selected" : "items selected"}
+                  {currentOutletItemsCount === 1 ? "item in cart" : "items in cart"}
                 </span>
                 <span className="text-zinc-500">·</span>
                 <span className="text-base font-bold text-orange-400">
-                  ৳{totalEstimatedPrice.toFixed(2)}
+                  ৳{currentOutletTotal.toFixed(2)}
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-zinc-400">
-                Selection ready for {shopName} · {cafeteriaName} (Cart milestone next)
+                {shopName} · {cafeteriaName}
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleClearAll}
+                onClick={clearCart}
                 className="rounded-full bg-zinc-800 px-3.5 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-zinc-600"
               >
                 Clear
               </button>
-              <div className="rounded-full bg-orange-500/20 px-3.5 py-2 text-xs font-medium text-orange-300">
-                Menu Mode Active
-              </div>
+              <Link
+                href="/customer/cart"
+                className="inline-flex items-center gap-2 rounded-full bg-orange-600 px-5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-600"
+              >
+                <span>View Cart</span>
+                <span>→</span>
+              </Link>
             </div>
           </div>
         </aside>
+      ) : null}
+
+      {/* Outlet Conflict Modal */}
+      {pendingSwitch ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="switch-outlet-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md rounded-[2rem] border border-orange-100 bg-white p-6 shadow-2xl sm:p-8">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+            </div>
+
+            <h3 id="switch-outlet-title" className="mt-4 text-xl font-bold text-zinc-950">
+              Start a new order?
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">
+              Your cart currently contains items from <strong>{cart.outlet?.shop_name}</strong> (
+              {cart.outlet?.cafeteria_name}).
+            </p>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">
+              Each order is strictly for one sales point. Would you like to clear your current cart and start ordering from <strong>{pendingSwitch.outlet.shop_name}</strong>?
+            </p>
+
+            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={cancelOutletSwitch}
+                className="rounded-full border border-zinc-200 px-5 py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+              >
+                Keep Current Cart
+              </button>
+              <button
+                type="button"
+                onClick={confirmOutletSwitch}
+                className="rounded-full bg-orange-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-600 focus:ring-offset-1"
+              >
+                Clear & Switch Outlet
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

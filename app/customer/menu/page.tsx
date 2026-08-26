@@ -115,8 +115,11 @@ export default async function CustomerMenuPage({ searchParams }: CustomerMenuPag
         {!menuError ? (
           <CustomerMenuClient
             items={menuItems}
+            shopId={shop.id}
             shopName={shop.name}
+            cafeteriaId={cafeteria.id}
             cafeteriaName={cafeteria.name}
+            universityId={university.id}
             universityName={university.name}
           />
         ) : null}
