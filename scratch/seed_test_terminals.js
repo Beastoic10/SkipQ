@@ -124,12 +124,18 @@ async function main() {
 
   // Setup User 1 Profile, Role, Terminal Account
   await supabase.from('profiles').upsert({ id: user1.id, display_name: "Ground Floor Terminal", is_active: true });
-  await supabase.from('user_roles').upsert({ user_id: user1.id, role_id: terminalRoleId, is_active: true }, { onConflict: 'user_id,role_id' });
+  const { data: u1Role } = await supabase.from('user_roles').select('id').eq('user_id', user1.id).eq('role_id', terminalRoleId).maybeSingle();
+  if (!u1Role) {
+    await supabase.from('user_roles').insert({ user_id: user1.id, role_id: terminalRoleId, is_active: true });
+  }
   await supabase.from('terminal_accounts').upsert({ auth_user_id: user1.id, shop_id: shop1.id, display_name: "Ground Floor Terminal", is_active: true }, { onConflict: 'auth_user_id' });
 
   // Setup User 2 Profile, Role, Terminal Account
   await supabase.from('profiles').upsert({ id: user2.id, display_name: "1st Floor Terminal", is_active: true });
-  await supabase.from('user_roles').upsert({ user_id: user2.id, role_id: terminalRoleId, is_active: true }, { onConflict: 'user_id,role_id' });
+  const { data: u2Role } = await supabase.from('user_roles').select('id').eq('user_id', user2.id).eq('role_id', terminalRoleId).maybeSingle();
+  if (!u2Role) {
+    await supabase.from('user_roles').insert({ user_id: user2.id, role_id: terminalRoleId, is_active: true });
+  }
   await supabase.from('terminal_accounts').upsert({ auth_user_id: user2.id, shop_id: shop2.id, display_name: "1st Floor Terminal", is_active: true }, { onConflict: 'auth_user_id' });
 
   console.log("\n==========================================");
