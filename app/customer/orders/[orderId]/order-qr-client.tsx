@@ -22,7 +22,9 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
     dataUrl: null,
     hasToken: true,
   });
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
 
+  // Realtime subscription — scoped strictly to this customer's own order ID
   useEffect(() => {
     const supabase = createClient();
 
@@ -40,7 +42,9 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
           router.refresh();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        setIsRealtimeConnected(status === "SUBSCRIBED");
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -51,6 +55,14 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
     let isCancelled = false;
 
     const generateQRCode = async () => {
+      // QR is only relevant for active (non-terminal) orders
+      if (order.status === "COLLECTED" || order.status === "CANCELLED") {
+        if (!isCancelled) {
+          setQrState({ isLoading: false, dataUrl: null, hasToken: false });
+        }
+        return;
+      }
+
       // Attempt to read the collection token from client storage
       let token = sessionStorage.getItem(`skipq_qr_${order.id}`);
       if (!token) {
@@ -59,11 +71,7 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
 
       if (!token) {
         if (!isCancelled) {
-          setQrState({
-            isLoading: false,
-            dataUrl: null,
-            hasToken: false,
-          });
+          setQrState({ isLoading: false, dataUrl: null, hasToken: false });
         }
         return;
       }
@@ -80,20 +88,12 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
         });
 
         if (!isCancelled) {
-          setQrState({
-            isLoading: false,
-            dataUrl: url,
-            hasToken: true,
-          });
+          setQrState({ isLoading: false, dataUrl: url, hasToken: true });
         }
       } catch (err) {
         console.error("QR Generation error:", err);
         if (!isCancelled) {
-          setQrState({
-            isLoading: false,
-            dataUrl: null,
-            hasToken: false,
-          });
+          setQrState({ isLoading: false, dataUrl: null, hasToken: false });
         }
       }
     };
@@ -103,7 +103,7 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
     return () => {
       isCancelled = true;
     };
-  }, [order.id]);
+  }, [order.id, order.status]);
 
   const statusConfig = {
     PLACED: {
@@ -117,7 +117,7 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
       step: 2,
     },
     READY: {
-      label: "Ready for Pickup",
+      label: "Ready for Pickup! 🎉",
       color: "bg-emerald-100 text-emerald-800 border-emerald-200",
       step: 3,
     },
@@ -153,21 +153,38 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
     hour12: true,
   });
 
+  const isTerminalState = order.status === "COLLECTED" || order.status === "CANCELLED";
+
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-12">
       {/* Top Header Card */}
       <div className="rounded-[2rem] border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">
-                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-                Success
-              </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              {order.status !== "CANCELLED" && order.status !== "PAYMENT_PENDING" && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Order Confirmed
+                </span>
+              )}
               <span className="text-xs font-semibold uppercase tracking-wider text-orange-700">
-                Cash Order
+                {order.payment_method === "CASH" ? "Cash Order" : "Online Order"}
+              </span>
+              {/* Realtime status dot */}
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  isRealtimeConnected
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : "bg-zinc-100 text-zinc-500 border border-zinc-200"
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${isRealtimeConnected ? "bg-emerald-500 animate-pulse" : "bg-zinc-400"}`}
+                />
+                {isRealtimeConnected ? "Live" : "Connecting…"}
               </span>
             </div>
 
@@ -183,12 +200,46 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
             >
               {currentStatusInfo.label}
             </span>
-            <span className="mt-1 text-xs text-zinc-500">Payment: CASH</span>
+            <span className="mt-1 text-xs text-zinc-500">
+              Payment: {order.payment_method === "CASH" ? "Cash on Collection" : "Online"}
+            </span>
           </div>
         </div>
 
         {/* Status Lifecycle Stepper */}
-        {order.status !== "CANCELLED" ? (
+        {order.status === "CANCELLED" ? (
+          <div className="mt-6 rounded-2xl bg-rose-50 border border-rose-100 p-4 text-xs text-rose-800">
+            <div className="flex items-start gap-2">
+              <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M15 9l-6 6M9 9l6 6" />
+              </svg>
+              <div>
+                <strong className="font-bold">Order Cancelled</strong>
+                {order.cancellation_reason && (
+                  <p className="mt-1 text-rose-700">{order.cancellation_reason}</p>
+                )}
+                <p className="mt-1 text-rose-600">
+                  If you have questions, please contact the sales point directly.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : order.status === "COLLECTED" ? (
+          <div className="mt-6 rounded-2xl bg-emerald-50 border border-emerald-100 p-4 text-xs text-emerald-800">
+            <div className="flex items-start gap-2">
+              <svg className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+              <div>
+                <strong className="font-bold">Order Collected Successfully!</strong>
+                <p className="mt-1 text-emerald-700">
+                  Enjoy your food! Thank you for using SkipQ.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
           <div className="mt-6 border-t border-orange-50 pt-5">
             <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-semibold">
               <div
@@ -216,75 +267,80 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
                     : "bg-zinc-100 text-zinc-400"
                 }`}
               >
-                3. Ready
+                {order.status === "READY" ? "✓ Ready!" : "3. Ready"}
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="mt-6 rounded-2xl bg-rose-50 p-4 text-xs text-rose-800">
-            <strong>Order Cancelled:</strong> {order.cancellation_reason || "Cancelled by staff"}
+            {order.status === "READY" && (
+              <p className="mt-3 text-center text-sm font-bold text-emerald-700 animate-pulse">
+                🎉 Your order is ready — head to the counter now!
+              </p>
+            )}
           </div>
         )}
       </div>
 
-      {/* Prominent QR Code Collection Box */}
-      <div className="rounded-[2.5rem] border border-orange-200 bg-white p-6 text-center shadow-lg sm:p-8">
-        <div className="mx-auto max-w-sm">
-          <div className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-3.5 py-1 text-xs font-bold text-orange-800">
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="7" height="7" />
-              <rect x="14" y="3" width="7" height="7" />
-              <rect x="14" y="14" width="7" height="7" />
-              <rect x="3" y="14" width="7" height="7" />
-            </svg>
-            Digital Collection Credential
-          </div>
+      {/* QR Code Collection Box — hidden for COLLECTED and CANCELLED orders */}
+      {!isTerminalState && (
+        <div className="rounded-[2.5rem] border border-orange-200 bg-white p-6 text-center shadow-lg sm:p-8">
+          <div className="mx-auto max-w-sm">
+            <div className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-3.5 py-1 text-xs font-bold text-orange-800">
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+              </svg>
+              Digital Collection Credential
+            </div>
 
-          <h2 className="mt-3 text-xl font-extrabold text-zinc-950">
-            Collection QR Code
-          </h2>
-          <p className="mt-1 text-xs text-zinc-600">
-            Show this QR code at the counter when collecting your order.
-          </p>
+            <h2 className="mt-3 text-xl font-extrabold text-zinc-950">
+              Collection QR Code
+            </h2>
+            <p className="mt-1 text-xs text-zinc-600">
+              Show this QR code at the counter when collecting your order.
+            </p>
 
-          {/* QR Code Canvas/Image */}
-          <div className="my-6 flex justify-center">
-            {qrState.isLoading ? (
-              <div className="flex h-64 w-64 items-center justify-center rounded-3xl border border-dashed border-orange-200 bg-orange-50">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-orange-600 border-t-transparent" />
-              </div>
-            ) : qrState.dataUrl ? (
-              <div className="rounded-3xl border-4 border-orange-500/30 bg-white p-4 shadow-md transition hover:scale-[1.02]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={qrState.dataUrl}
-                  alt={`Collection QR for order ${order.order_number}`}
-                  className="h-64 w-64 rounded-xl object-contain sm:h-72 sm:w-72"
-                />
-              </div>
-            ) : (
-              <div className="flex h-64 w-64 flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-center text-xs text-zinc-500">
-                <svg className="h-10 w-10 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                <p className="mt-3 font-semibold text-zinc-700">QR Available on Origin Device</p>
-                <p className="mt-1 text-[11px] leading-4 text-zinc-500">
-                  For security, the collection QR is delivered once upon order creation to the originating device session.
-                </p>
-              </div>
-            )}
-          </div>
+            {/* QR Code Canvas/Image */}
+            <div className="my-6 flex justify-center">
+              {qrState.isLoading ? (
+                <div className="flex h-64 w-64 items-center justify-center rounded-3xl border border-dashed border-orange-200 bg-orange-50">
+                  <div className="h-8 w-8 animate-spin rounded-full border-4 border-orange-600 border-t-transparent" />
+                </div>
+              ) : qrState.dataUrl ? (
+                <div className="rounded-3xl border-4 border-orange-500/30 bg-white p-4 shadow-md transition hover:scale-[1.02]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={qrState.dataUrl}
+                    alt={`Collection QR for order ${order.order_number}`}
+                    className="h-64 w-64 rounded-xl object-contain sm:h-72 sm:w-72"
+                  />
+                </div>
+              ) : (
+                <div className="flex h-64 w-64 flex-col items-center justify-center rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-center text-xs text-zinc-500">
+                  <svg className="h-10 w-10 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                  </svg>
+                  <p className="mt-3 font-semibold text-zinc-700">QR Available on Origin Device</p>
+                  <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+                    For security, the collection QR is delivered once upon order creation to the originating device session.
+                  </p>
+                </div>
+              )}
+            </div>
 
-          <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-4 text-left text-xs leading-5 text-zinc-700">
-            <div className="font-semibold text-orange-950">Pickup Instructions:</div>
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-zinc-600">
-              <li>Head to <strong>{order.shop.name}</strong> ({order.cafeteria.name}).</li>
-              <li>Present this QR code to the cashier / terminal scanner.</li>
-              <li>Pay <strong>৳{order.total_amount.toFixed(2)}</strong> cash at the counter upon collection.</li>
-            </ul>
+            <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-4 text-left text-xs leading-5 text-zinc-700">
+              <div className="font-semibold text-orange-950">Pickup Instructions:</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-zinc-600">
+                <li>Head to <strong>{order.shop.name}</strong> ({order.cafeteria.name}).</li>
+                <li>Present this QR code to the cashier / terminal scanner.</li>
+                {order.payment_method === "CASH" && (
+                  <li>Pay <strong>৳{order.total_amount.toFixed(2)}</strong> cash at the counter upon collection.</li>
+                )}
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Order Summary & Receipt Details */}
       <div className="rounded-[2rem] border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
@@ -318,7 +374,9 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
         <div className="mt-4 space-y-2 text-sm">
           <div className="flex justify-between font-medium text-zinc-600">
             <span>Payment Method</span>
-            <span className="font-bold text-zinc-900">Cash on Collection</span>
+            <span className="font-bold text-zinc-900">
+              {order.payment_method === "CASH" ? "Cash on Collection" : "Online"}
+            </span>
           </div>
           <div className="flex justify-between items-baseline pt-2 border-t border-orange-100">
             <span className="text-base font-bold text-zinc-950">Total Amount</span>

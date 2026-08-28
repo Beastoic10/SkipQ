@@ -100,9 +100,9 @@ export async function requireAdmin() {
 
 export async function requireTerminalAccount() {
   const context = await requireAuthenticatedUser();
-  const isTerminal = context.roles.includes("terminal") || context.roles.includes("shop_staff");
+  const isTerminal = context.roles.includes("terminal");
 
-  const shopId = context.terminalAccount?.shop_id ?? (context.shopMemberships[0]?.shop_id || null);
+  const shopId = context.terminalAccount?.shop_id ?? null;
 
   if (!isTerminal || !shopId) {
     redirect("/auth/login?message=unauthorized");

@@ -22,18 +22,29 @@ const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
 async function main() {
   console.log("Initializing Supabase Clients...");
   const adminClient = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+  // 2. Set up authenticated customer client
+  console.log("Authenticating customer client...");
+  const custEmail = "testcustomer@skipq.local";
   const client = createClient(supabaseUrl, anonKey, { auth: { persistSession: false } });
-
-  // 1. Get an order to use for testing
-  const { data: orders, error: ordersErr } = await adminClient.from('orders').select('*').limit(1);
-  if (ordersErr || !orders || orders.length === 0) {
-    console.error("No orders found to test with:", ordersErr);
+  const { error: loginError } = await client.auth.signInWithPassword({
+    email: custEmail,
+    password: "Customer123!"
+  });
+  if (loginError) {
+    console.error("Customer login failed:", loginError);
     return;
   }
-  const testOrder = orders[0];
-  console.log(`Using order ${testOrder.order_number} (ID: ${testOrder.id}) with status ${testOrder.status}`);
 
-  // 2. Set up realtime subscription
+  // Get an order belonging to this customer
+  const { data: customerOrders, error: custOrdersErr } = await client.from('orders').select('*').limit(1);
+  if (custOrdersErr || !customerOrders || customerOrders.length === 0) {
+    console.error("No orders found for testcustomer@skipq.local:", custOrdersErr);
+    return;
+  }
+  const testOrder = customerOrders[0];
+  console.log(`Using customer order ${testOrder.order_number} (ID: ${testOrder.id}) with status ${testOrder.status}`);
+
+  // 3. Set up realtime subscription
   console.log("Setting up client realtime subscription...");
   let updateReceived = false;
   
@@ -57,7 +68,6 @@ async function main() {
       if (status === 'SUBSCRIBED') {
         // Trigger an update using the admin client
         console.log("Triggering DB update...");
-        // Flip status back and forth or just update updated_at
         adminClient.from('orders')
           .update({ updated_at: new Date().toISOString() })
           .eq('id', testOrder.id)
