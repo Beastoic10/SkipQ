@@ -9,8 +9,8 @@ import {
   updateOrderStatusAction,
   validateCollectionQRAction,
   cancelOrderAction,
-  lookupOrderBySerialAction,
-  collectOrderBySerialAction,
+  lookupOrderByCodeAction,
+  collectOrderByCodeAction,
   type LookupResult,
 } from "@/lib/terminal/actions";
 
@@ -51,11 +51,11 @@ export function TerminalDashboardClient({
     message: string;
   } | null>(null);
 
-  // Serial tab state
-  const [serialInput, setSerialInput] = useState("");
-  const [serialStep, setSerialStep] = useState<SerialStep>("lookup");
-  const [serialLookupResult, setSerialLookupResult] = useState<LookupResult | null>(null);
-  const [serialFeedback, setSerialFeedback] = useState<{
+  // Code tab state
+  const [codeInput, setCodeInput] = useState("");
+  const [codeStep, setCodeStep] = useState<SerialStep>("lookup");
+  const [codeLookupResult, setCodeLookupResult] = useState<LookupResult | null>(null);
+  const [codeFeedback, setCodeFeedback] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
@@ -107,10 +107,10 @@ export function TerminalDashboardClient({
     setCollectTab(tab);
     setQrFeedback(null);
     setQrTokenInput("");
-    setSerialInput("");
-    setSerialStep("lookup");
-    setSerialLookupResult(null);
-    setSerialFeedback(null);
+    setCodeInput("");
+    setCodeStep("lookup");
+    setCodeLookupResult(null);
+    setCodeFeedback(null);
     setIsCollectModalOpen(true);
   };
 
@@ -156,49 +156,49 @@ export function TerminalDashboardClient({
     });
   };
 
-  // ── Handlers: serial lookup ───────────────────────────────────────────────
-  const handleSerialLookup = async (e: React.FormEvent) => {
+  // ── Handlers: code lookup ─────────────────────────────────────────────────
+  const handleCodeLookup = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSerialFeedback(null);
-    setSerialLookupResult(null);
+    setCodeFeedback(null);
+    setCodeLookupResult(null);
 
-    if (!serialInput.trim()) {
-      setSerialFeedback({ type: "error", message: "Enter an order number" });
+    if (!codeInput.trim()) {
+      setCodeFeedback({ type: "error", message: "Enter an order code" });
       return;
     }
 
     startTransition(async () => {
-      const res = await lookupOrderBySerialAction(serialInput, shopDetails.id);
+      const res = await lookupOrderByCodeAction(codeInput, shopDetails.id);
       if (res.success) {
-        setSerialLookupResult(res);
-        setSerialStep("confirm");
+        setCodeLookupResult(res);
+        setCodeStep("confirm");
       } else {
-        setSerialFeedback({ type: "error", message: res.message });
+        setCodeFeedback({ type: "error", message: res.message });
       }
     });
   };
 
-  const handleSerialCollect = async () => {
-    if (!serialLookupResult?.dailySerial) return;
-    setSerialFeedback(null);
+  const handleCodeCollect = async () => {
+    if (!codeLookupResult?.orderCode) return;
+    setCodeFeedback(null);
 
     startTransition(async () => {
-      const res = await collectOrderBySerialAction(serialLookupResult.dailySerial!, shopDetails.id);
+      const res = await collectOrderByCodeAction(codeLookupResult.orderCode!, shopDetails.id);
       if (res.success) {
-        setSerialFeedback({ type: "success", message: res.message });
-        setSerialStep("lookup");
-        setSerialInput("");
-        setSerialLookupResult(null);
+        setCodeFeedback({ type: "success", message: res.message });
+        setCodeStep("lookup");
+        setCodeInput("");
+        setCodeLookupResult(null);
       } else {
-        setSerialFeedback({ type: "error", message: res.message });
+        setCodeFeedback({ type: "error", message: res.message });
       }
     });
   };
 
-  const handleSerialBack = () => {
-    setSerialStep("lookup");
-    setSerialLookupResult(null);
-    setSerialFeedback(null);
+  const handleCodeBack = () => {
+    setCodeStep("lookup");
+    setCodeLookupResult(null);
+    setCodeFeedback(null);
   };
 
   // ── Handlers: cancellation ────────────────────────────────────────────────
@@ -470,8 +470,8 @@ export function TerminalDashboardClient({
                     {[...completedOrders, ...cancelledOrders].map((order) => (
                       <tr key={order.id} className="hover:bg-zinc-800/50">
                         <td className="py-3 px-4 font-black text-violet-300">
-                          {order.daily_serial != null
-                            ? `#${String(order.daily_serial).padStart(3, "0")}`
+                          {order.order_code != null
+                            ? `#${order.order_code}`
                             : "—"}
                         </td>
                         <td className="py-3 px-4 font-black text-white">{order.order_number}</td>
@@ -550,7 +550,7 @@ export function TerminalDashboardClient({
                 id="collect-tab-serial"
                 onClick={() => {
                   setCollectTab("serial");
-                  setSerialFeedback(null);
+                  setCodeFeedback(null);
                 }}
                 className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-bold transition ${
                   collectTab === "serial"
@@ -619,35 +619,35 @@ export function TerminalDashboardClient({
               </form>
             )}
 
-            {/* ── Serial tab ── */}
+            {/* ── Code tab ── */}
             {collectTab === "serial" && (
               <div className="mt-5 space-y-4">
                 {/* Step 1: lookup */}
-                {serialStep === "lookup" && (
-                  <form onSubmit={handleSerialLookup} className="space-y-4">
+                {codeStep === "lookup" && (
+                  <form onSubmit={handleCodeLookup} className="space-y-4">
                     <div>
                       <label className="block text-xs font-semibold text-zinc-300">
-                        Today&apos;s Order Number
+                        Today&apos;s Order Code
                       </label>
                       <p className="mt-1 text-[11px] text-zinc-500">
-                        Enter the 3-digit daily order number (e.g. 001, 042).
+                        Enter the 4-digit order code shown on the customer&apos;s receipt (e.g. 0042).
                       </p>
                       <input
-                        id="serial-input"
-                        type="number"
-                        min="1"
-                        max="2000"
-                        value={serialInput}
-                        onChange={(e) => setSerialInput(e.target.value)}
-                        placeholder="e.g. 42"
-                        className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-2xl font-black text-white placeholder-zinc-700 focus:border-violet-500 focus:outline-none text-center tracking-widest"
+                        id="code-input"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={4}
+                        value={codeInput}
+                        onChange={(e) => setCodeInput(e.target.value.replace(/\D/g, ""))}
+                        placeholder="0042"
+                        className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-3xl font-black text-white placeholder-zinc-700 focus:border-violet-500 focus:outline-none text-center tracking-[0.4em]"
                         autoFocus
                       />
                     </div>
 
-                    {serialFeedback && (
+                    {codeFeedback && (
                       <div className="rounded-2xl bg-rose-950/80 border border-rose-800 p-3 text-xs text-rose-200">
-                        {serialFeedback.message}
+                        {codeFeedback.message}
                       </div>
                     )}
 
@@ -660,7 +660,7 @@ export function TerminalDashboardClient({
                         Cancel
                       </button>
                       <button
-                        id="serial-lookup-submit"
+                        id="code-lookup-submit"
                         type="submit"
                         disabled={isPending}
                         className="w-1/2 rounded-2xl bg-violet-600 px-4 py-3 text-xs font-bold text-white hover:bg-violet-500 disabled:opacity-50"
@@ -672,7 +672,7 @@ export function TerminalDashboardClient({
                 )}
 
                 {/* Step 2: confirm collect */}
-                {serialStep === "confirm" && serialLookupResult && (
+                {codeStep === "confirm" && codeLookupResult && (
                   <div className="space-y-4">
                     {/* Order summary card */}
                     <div className="rounded-2xl border border-zinc-700 bg-zinc-950 p-4 space-y-3">
@@ -682,56 +682,53 @@ export function TerminalDashboardClient({
                         </span>
                         <span
                           className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-extrabold border ${
-                            serialLookupResult.status === "READY"
+                            codeLookupResult.status === "READY"
                               ? "bg-emerald-950 text-emerald-300 border-emerald-800"
-                              : serialLookupResult.status === "COLLECTED"
+                              : codeLookupResult.status === "COLLECTED"
                               ? "bg-zinc-800 text-zinc-300 border-zinc-700"
                               : "bg-amber-950 text-amber-300 border-amber-800"
                           }`}
                         >
-                          {serialLookupResult.status}
+                          {codeLookupResult.status}
                         </span>
                       </div>
-                      <div className="text-4xl font-black text-white tracking-tight">
-                        #
-                        {serialLookupResult.dailySerial != null
-                          ? String(serialLookupResult.dailySerial).padStart(3, "0")
-                          : "—"}
+                      <div className="text-5xl font-black text-white tracking-[0.15em]">
+                        #{codeLookupResult.orderCode ?? "——"}
                       </div>
-                      <div className="text-[11px] text-zinc-500 font-mono">{serialLookupResult.orderNumber}</div>
+                      <div className="text-[11px] text-zinc-500 font-mono">{codeLookupResult.orderNumber}</div>
                       <div className="flex items-center justify-between pt-1 border-t border-zinc-800">
-                        <span className="text-xs text-zinc-400">{serialLookupResult.paymentMethod}</span>
+                        <span className="text-xs text-zinc-400">{codeLookupResult.paymentMethod}</span>
                         <span className="text-sm font-black text-white">
-                          ৳{serialLookupResult.totalAmount?.toFixed(2) ?? "—"}
+                          ৳{codeLookupResult.totalAmount?.toFixed(2) ?? "—"}
                         </span>
                       </div>
                     </div>
 
-                    {serialFeedback && (
+                    {codeFeedback && (
                       <div
                         className={`rounded-2xl p-3 text-xs font-medium ${
-                          serialFeedback.type === "success"
+                          codeFeedback.type === "success"
                             ? "bg-emerald-950/80 border border-emerald-800 text-emerald-200"
                             : "bg-rose-950/80 border border-rose-800 text-rose-200"
                         }`}
                       >
-                        {serialFeedback.message}
+                        {codeFeedback.message}
                       </div>
                     )}
 
-                    {serialLookupResult.status === "READY" ? (
+                    {codeLookupResult.status === "READY" ? (
                       <div className="flex gap-3 pt-2">
                         <button
                           type="button"
-                          onClick={handleSerialBack}
+                          onClick={handleCodeBack}
                           className="w-1/2 rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
                         >
                           ← Back
                         </button>
                         <button
-                          id="serial-collect-confirm"
+                          id="code-collect-confirm"
                           type="button"
-                          onClick={handleSerialCollect}
+                          onClick={handleCodeCollect}
                           disabled={isPending}
                           className="w-1/2 rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
                         >
@@ -741,11 +738,11 @@ export function TerminalDashboardClient({
                     ) : (
                       <div className="space-y-3">
                         <div className="rounded-2xl bg-amber-950/60 border border-amber-800/40 p-3 text-xs text-amber-300">
-                          This order is <strong>{serialLookupResult.status}</strong> — it cannot be collected yet.
+                          This order is <strong>{codeLookupResult.status}</strong> — it cannot be collected yet.
                         </div>
                         <button
                           type="button"
-                          onClick={handleSerialBack}
+                          onClick={handleCodeBack}
                           className="w-full rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
                         >
                           ← Back
@@ -860,12 +857,12 @@ function OrderCard({
         {/* Header line */}
         <div className="flex items-start justify-between gap-2 border-b border-zinc-800/80 pb-3">
           <div>
-            {/* Daily serial badge — prominent verbal identifier */}
-            {order.daily_serial != null ? (
+            {/* Order code badge — 4-digit verbal identifier */}
+            {order.order_code != null ? (
               <div className="mb-1 inline-flex items-center gap-1 rounded-lg bg-violet-950 border border-violet-800/60 px-2 py-0.5">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400">Order</span>
-                <span className="text-xl font-black text-violet-200 tabular-nums">
-                  #{String(order.daily_serial).padStart(3, "0")}
+                <span className="text-xl font-black text-violet-200 tabular-nums tracking-[0.15em]">
+                  #{order.order_code}
                 </span>
               </div>
             ) : (

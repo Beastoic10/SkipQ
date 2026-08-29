@@ -127,38 +127,39 @@ export async function cancelOrderAction(
 export type LookupResult = ActionResult & {
   orderId?: string;
   orderNumber?: string;
-  dailySerial?: number;
+  orderCode?: string;
   status?: string;
   totalAmount?: number;
   paymentMethod?: string;
 };
 
 /**
- * Look up a today's order by its daily serial number (1–2000).
- * Authorization is derived from the terminal session — the server-verified shopId
- * is used for the RPC, so a malicious client cannot probe other shops.
+ * Look up today's order by its 4-digit order code (e.g. "0042" or "42").
+ * Authorization is derived from the terminal session — the server-verified
+ * shopId is used, so a malicious client cannot probe other shops.
  */
-export async function lookupOrderBySerialAction(
-  serialInput: string,
+export async function lookupOrderByCodeAction(
+  codeInput: string,
   shopId: string
 ): Promise<LookupResult> {
   try {
     const context = await requireTerminalShop(shopId);
     const supabase = await createClient();
 
-    const serial = parseInt(serialInput.trim(), 10);
-    if (isNaN(serial) || serial < 1 || serial > 2000) {
-      return { success: false, message: "Enter a valid order number between 1 and 2000" };
+    const raw = codeInput.trim().replace(/\D/g, "");
+    if (!raw || raw.length > 4) {
+      return { success: false, message: "Enter a 4-digit order code (e.g. 0042)" };
     }
+    const paddedCode = raw.padStart(4, "0");
 
-    const { data, error } = await supabase.rpc("lookup_order_by_daily_serial", {
-      p_serial: serial,
+    const { data, error } = await supabase.rpc("lookup_order_by_code", {
+      p_code:    paddedCode,
       p_shop_id: context.shopId,
       // p_order_date defaults to current_date on the server
     });
 
     if (error) {
-      console.error("lookup_order_by_daily_serial RPC error:", error);
+      console.error("lookup_order_by_code RPC error:", error);
       return { success: false, message: error.message || "Order lookup failed" };
     }
 
@@ -167,7 +168,7 @@ export async function lookupOrderBySerialAction(
       message?: string;
       order_id?: string;
       order_number?: string;
-      daily_serial?: number;
+      order_code?: string;
       status?: string;
       total_amount?: number;
       payment_method?: string;
@@ -179,10 +180,10 @@ export async function lookupOrderBySerialAction(
 
     return {
       success: true,
-      message: `Order #${result.daily_serial} found — Status: ${result.status}`,
+      message: `Order #${result.order_code} found — Status: ${result.status}`,
       orderId: result.order_id,
       orderNumber: result.order_number,
-      dailySerial: result.daily_serial,
+      orderCode: result.order_code,
       status: result.status,
       totalAmount: result.total_amount,
       paymentMethod: result.payment_method,
@@ -196,37 +197,38 @@ export async function lookupOrderBySerialAction(
 }
 
 /**
- * Collect a READY order immediately by its daily serial number.
- * Option A: no QR token required — serial lookup alone is sufficient proof.
+ * Collect a READY order immediately by its 4-digit order code.
+ * Option A: no QR token required — code lookup alone is sufficient.
  * Authorization is derived from the terminal session.
  */
-export async function collectOrderBySerialAction(
-  serial: number,
+export async function collectOrderByCodeAction(
+  code: string,
   shopId: string
-): Promise<ActionResult & { orderId?: string; orderNumber?: string; dailySerial?: number }> {
+): Promise<ActionResult & { orderId?: string; orderNumber?: string; orderCode?: string }> {
   try {
     const context = await requireTerminalShop(shopId);
     const supabase = await createClient();
 
-    if (serial < 1 || serial > 2000) {
-      return { success: false, message: "Invalid serial number" };
+    const paddedCode = code.replace(/\D/g, "").padStart(4, "0");
+    if (paddedCode.length > 4) {
+      return { success: false, message: "Invalid order code" };
     }
 
-    const { data, error } = await supabase.rpc("collect_order_by_serial", {
-      p_serial: serial,
+    const { data, error } = await supabase.rpc("collect_order_by_code", {
+      p_code:    paddedCode,
       p_shop_id: context.shopId,
       // p_order_date defaults to current_date on the server
     });
 
     if (error) {
-      console.error("collect_order_by_serial RPC error:", error);
+      console.error("collect_order_by_code RPC error:", error);
       return { success: false, message: error.message || "Collection failed" };
     }
 
     const result = data as {
       order_id?: string;
       order_number?: string;
-      daily_serial?: number;
+      order_code?: string;
       message?: string;
       already_collected?: boolean;
     };
@@ -234,10 +236,10 @@ export async function collectOrderBySerialAction(
     revalidatePath(`/terminal/${context.shopId}`);
     return {
       success: true,
-      message: result?.message || `Order #${serial} marked as COLLECTED`,
+      message: result?.message || `Order #${code} marked as COLLECTED`,
       orderId: result?.order_id,
       orderNumber: result?.order_number,
-      dailySerial: result?.daily_serial,
+      orderCode: result?.order_code,
     };
   } catch (err: unknown) {
     return {

@@ -191,6 +191,15 @@ export function OrderQRClient({ order }: OrderQRClientProps) {
             <h1 className="mt-2 text-2xl font-black tracking-tight text-zinc-950 sm:text-3xl">
               Order #{order.order_number}
             </h1>
+            {order.order_code != null && (
+              <div className="mt-3 inline-flex items-baseline gap-2 rounded-2xl bg-violet-50 border border-violet-200 px-4 py-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-violet-500">Code</span>
+                <span className="text-4xl font-black tracking-[0.2em] text-violet-700 tabular-nums">
+                  #{order.order_code}
+                </span>
+              </div>
+            )}
+            <p className="mt-2 text-xs text-zinc-400">Tell the counter: <strong className="text-zinc-600">#{order.order_code ?? order.order_number}</strong></p>
             <p className="mt-1 text-xs text-zinc-500">Placed on {formattedDate}</p>
           </div>
 

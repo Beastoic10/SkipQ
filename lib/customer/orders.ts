@@ -24,6 +24,7 @@ export type OrderStatusEventDetail = {
 export type CustomerOrderDetails = {
   id: string;
   order_number: string;
+  order_code: string | null;
   customer_id: string;
   status: "PAYMENT_PENDING" | "PLACED" | "PREPARING" | "READY" | "COLLECTED" | "CANCELLED";
   payment_method: "CASH" | "ONLINE";
@@ -66,6 +67,7 @@ export async function getCustomerOrderDetails(orderId: string): Promise<Customer
     .select(`
       id,
       order_number,
+      order_code,
       customer_id,
       status,
       payment_method,
@@ -153,6 +155,7 @@ export async function getCustomerOrderDetails(orderId: string): Promise<Customer
   return {
     id: order.id,
     order_number: order.order_number,
+    order_code: (order.order_code as string | null) ?? null,
     customer_id: order.customer_id,
     status: order.status as CustomerOrderDetails["status"],
     payment_method: order.payment_method as CustomerOrderDetails["payment_method"],
