@@ -9,6 +9,9 @@ import {
   updateOrderStatusAction,
   validateCollectionQRAction,
   cancelOrderAction,
+  lookupOrderBySerialAction,
+  collectOrderBySerialAction,
+  type LookupResult,
 } from "@/lib/terminal/actions";
 
 type TerminalDashboardClientProps = {
@@ -16,6 +19,12 @@ type TerminalDashboardClientProps = {
   orders: TerminalOrder[];
   terminalDisplayName: string;
 };
+
+// Which sub-tab is active inside the collect modal
+type CollectTab = "qr" | "serial";
+
+// State for the "serial" tab — two steps: lookup then confirm-collect
+type SerialStep = "lookup" | "confirm";
 
 export function TerminalDashboardClient({
   shopDetails,
@@ -31,21 +40,33 @@ export function TerminalDashboardClient({
   // Realtime connection state
   const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
 
-  // QR Modal State
-  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  // ── Collect Modal State ──────────────────────────────────────────────────
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
+  const [collectTab, setCollectTab] = useState<CollectTab>("qr");
+
+  // QR / Token tab state
   const [qrTokenInput, setQrTokenInput] = useState("");
   const [qrFeedback, setQrFeedback] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
 
-  // Cancellation Modal State
+  // Serial tab state
+  const [serialInput, setSerialInput] = useState("");
+  const [serialStep, setSerialStep] = useState<SerialStep>("lookup");
+  const [serialLookupResult, setSerialLookupResult] = useState<LookupResult | null>(null);
+  const [serialFeedback, setSerialFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  // ── Cancellation Modal State ─────────────────────────────────────────────
   const [cancellingOrder, setCancellingOrder] = useState<TerminalOrder | null>(null);
   const [cancellationReason, setCancellationReason] = useState("");
   const [restoreStock, setRestoreStock] = useState(true);
   const [cancelFeedback, setCancelFeedback] = useState<string | null>(null);
 
-  // Realtime subscription for incoming orders / updates strictly scoped to shop Details.id
+  // ── Realtime subscription ────────────────────────────────────────────────
   useEffect(() => {
     const supabase = createClient();
 
@@ -74,14 +95,37 @@ export function TerminalDashboardClient({
     };
   }, [shopDetails.id, router]);
 
-  // Order status counts
+  // ── Derived order lists ──────────────────────────────────────────────────
   const placedOrders = orders.filter((o) => o.status === "PLACED");
   const preparingOrders = orders.filter((o) => o.status === "PREPARING");
   const readyOrders = orders.filter((o) => o.status === "READY");
   const completedOrders = orders.filter((o) => o.status === "COLLECTED");
   const cancelledOrders = orders.filter((o) => o.status === "CANCELLED");
 
-  // Handlers
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const openCollectModal = (tab: CollectTab = "qr") => {
+    setCollectTab(tab);
+    setQrFeedback(null);
+    setQrTokenInput("");
+    setSerialInput("");
+    setSerialStep("lookup");
+    setSerialLookupResult(null);
+    setSerialFeedback(null);
+    setIsCollectModalOpen(true);
+  };
+
+  const closeCollectModal = () => {
+    setIsCollectModalOpen(false);
+  };
+
+  const formatTime = (isoString: string) =>
+    new Date(isoString).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+  // ── Handlers: status update ───────────────────────────────────────────────
   const handleUpdateStatus = (orderId: string, newStatus: "PREPARING" | "READY") => {
     startTransition(async () => {
       const res = await updateOrderStatusAction(orderId, newStatus, shopDetails.id);
@@ -91,6 +135,7 @@ export function TerminalDashboardClient({
     });
   };
 
+  // ── Handlers: QR / token collection ──────────────────────────────────────
   const handleValidateCollection = async (e: React.FormEvent) => {
     e.preventDefault();
     setQrFeedback(null);
@@ -111,6 +156,52 @@ export function TerminalDashboardClient({
     });
   };
 
+  // ── Handlers: serial lookup ───────────────────────────────────────────────
+  const handleSerialLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSerialFeedback(null);
+    setSerialLookupResult(null);
+
+    if (!serialInput.trim()) {
+      setSerialFeedback({ type: "error", message: "Enter an order number" });
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await lookupOrderBySerialAction(serialInput, shopDetails.id);
+      if (res.success) {
+        setSerialLookupResult(res);
+        setSerialStep("confirm");
+      } else {
+        setSerialFeedback({ type: "error", message: res.message });
+      }
+    });
+  };
+
+  const handleSerialCollect = async () => {
+    if (!serialLookupResult?.dailySerial) return;
+    setSerialFeedback(null);
+
+    startTransition(async () => {
+      const res = await collectOrderBySerialAction(serialLookupResult.dailySerial!, shopDetails.id);
+      if (res.success) {
+        setSerialFeedback({ type: "success", message: res.message });
+        setSerialStep("lookup");
+        setSerialInput("");
+        setSerialLookupResult(null);
+      } else {
+        setSerialFeedback({ type: "error", message: res.message });
+      }
+    });
+  };
+
+  const handleSerialBack = () => {
+    setSerialStep("lookup");
+    setSerialLookupResult(null);
+    setSerialFeedback(null);
+  };
+
+  // ── Handlers: cancellation ────────────────────────────────────────────────
   const handleConfirmCancellation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancellingOrder) return;
@@ -137,14 +228,7 @@ export function TerminalDashboardClient({
     });
   };
 
-  const formatTime = (isoString: string) => {
-    return new Date(isoString).toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  };
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-zinc-950 font-sans text-zinc-100 antialiased selection:bg-orange-500 selection:text-white">
       {/* Top Header / Status Bar */}
@@ -180,12 +264,11 @@ export function TerminalDashboardClient({
 
           {/* Action buttons header */}
           <div className="flex items-center gap-3">
+            {/* QR Scan button */}
             <button
-              onClick={() => {
-                setQrFeedback(null);
-                setIsQrModalOpen(true);
-              }}
-              className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-500 active:scale-95"
+              id="collect-qr-btn"
+              onClick={() => openCollectModal("qr")}
+              className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-500 active:scale-95"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <rect x="3" y="3" width="7" height="7" />
@@ -193,7 +276,19 @@ export function TerminalDashboardClient({
                 <rect x="14" y="14" width="7" height="7" />
                 <rect x="3" y="14" width="7" height="7" />
               </svg>
-              <span>Scan / Collect QR</span>
+              <span>Scan QR</span>
+            </button>
+            {/* Manual order # button */}
+            <button
+              id="collect-serial-btn"
+              onClick={() => openCollectModal("serial")}
+              className="inline-flex items-center gap-2 rounded-2xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-violet-600/20 transition hover:bg-violet-500 active:scale-95"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 7h4M3 12h8M3 17h4" strokeLinecap="round" />
+                <rect x="15" y="5" width="6" height="14" rx="1" />
+              </svg>
+              <span>Order #</span>
             </button>
             <LogoutButton />
           </div>
@@ -341,10 +436,7 @@ export function TerminalDashboardClient({
                     <OrderCard
                       key={order.id}
                       order={order}
-                      onUpdateStatus={() => {
-                        setIsQrModalOpen(true);
-                        setQrTokenInput("");
-                      }}
+                      onUpdateStatus={() => openCollectModal("qr")}
                       actionLabel="Scan QR / Collect"
                       actionColor="bg-emerald-600 hover:bg-emerald-500 text-white"
                       formatTime={formatTime}
@@ -359,12 +451,13 @@ export function TerminalDashboardClient({
           /* HISTORY TAB */
           <div className="space-y-6">
             <div className="rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
-              <h2 className="text-lg font-bold text-white mb-4">Completed & Cancelled Orders</h2>
+              <h2 className="text-lg font-bold text-white mb-4">Completed &amp; Cancelled Orders</h2>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="border-b border-zinc-800 text-zinc-400 uppercase font-semibold">
                     <tr>
-                      <th className="py-3 px-4">Order #</th>
+                      <th className="py-3 px-4">#</th>
+                      <th className="py-3 px-4">Order ID</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Items</th>
                       <th className="py-3 px-4">Payment</th>
@@ -376,6 +469,11 @@ export function TerminalDashboardClient({
                   <tbody className="divide-y divide-zinc-800 text-zinc-300">
                     {[...completedOrders, ...cancelledOrders].map((order) => (
                       <tr key={order.id} className="hover:bg-zinc-800/50">
+                        <td className="py-3 px-4 font-black text-violet-300">
+                          {order.daily_serial != null
+                            ? `#${String(order.daily_serial).padStart(3, "0")}`
+                            : "—"}
+                        </td>
                         <td className="py-3 px-4 font-black text-white">{order.order_number}</td>
                         <td className="py-3 px-4">
                           <span
@@ -405,77 +503,264 @@ export function TerminalDashboardClient({
         )}
       </main>
 
-      {/* QR COLLECTION MODAL */}
-      {isQrModalOpen && (
+      {/* ── COLLECT MODAL (dual-tab) ────────────────────────────────────── */}
+      {isCollectModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+            {/* Modal header */}
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold text-sm">
                   ✓
                 </div>
                 <h3 className="text-lg font-extrabold text-white">Collect Order</h3>
               </div>
               <button
-                onClick={() => setIsQrModalOpen(false)}
+                id="collect-modal-close"
+                onClick={closeCollectModal}
                 className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleValidateCollection} className="mt-6 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300">
-                  Scan QR or Enter Token
-                </label>
-                <p className="mt-1 text-[11px] text-zinc-500">
-                  Type or scan the customer&apos;s collection token string.
-                </p>
-                <input
-                  type="text"
-                  value={qrTokenInput}
-                  onChange={(e) => setQrTokenInput(e.target.value)}
-                  placeholder="e.g. SKQ-1042 or full token..."
-                  className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-mono text-white placeholder-zinc-600 focus:border-emerald-500 focus:outline-none"
-                  autoFocus
-                />
-              </div>
+            {/* Tab switcher */}
+            <div className="mt-4 flex rounded-2xl bg-zinc-950 p-1 gap-1">
+              <button
+                id="collect-tab-qr"
+                onClick={() => {
+                  setCollectTab("qr");
+                  setQrFeedback(null);
+                }}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-bold transition ${
+                  collectTab === "qr"
+                    ? "bg-emerald-600 text-white shadow"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <rect x="3" y="3" width="7" height="7" />
+                  <rect x="14" y="3" width="7" height="7" />
+                  <rect x="14" y="14" width="7" height="7" />
+                  <rect x="3" y="14" width="7" height="7" />
+                </svg>
+                Scan QR / Token
+              </button>
+              <button
+                id="collect-tab-serial"
+                onClick={() => {
+                  setCollectTab("serial");
+                  setSerialFeedback(null);
+                }}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-bold transition ${
+                  collectTab === "serial"
+                    ? "bg-violet-600 text-white shadow"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 7h4M3 12h8M3 17h4" strokeLinecap="round" />
+                  <rect x="15" y="5" width="6" height="14" rx="1" />
+                </svg>
+                Manual Order #
+              </button>
+            </div>
 
-              {qrFeedback && (
-                <div
-                  className={`rounded-2xl p-3 text-xs font-medium ${
-                    qrFeedback.type === "success"
-                      ? "bg-emerald-950/80 border border-emerald-800 text-emerald-200"
-                      : "bg-rose-950/80 border border-rose-800 text-rose-200"
-                  }`}
-                >
-                  {qrFeedback.message}
+            {/* ── QR / Token tab ── */}
+            {collectTab === "qr" && (
+              <form onSubmit={handleValidateCollection} className="mt-5 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300">
+                    Scan QR or Enter Token
+                  </label>
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Type or scan the customer&apos;s collection token string.
+                  </p>
+                  <input
+                    id="qr-token-input"
+                    type="text"
+                    value={qrTokenInput}
+                    onChange={(e) => setQrTokenInput(e.target.value)}
+                    placeholder="Hex token from customer QR code…"
+                    className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm font-mono text-white placeholder-zinc-600 focus:border-emerald-500 focus:outline-none"
+                    autoFocus
+                  />
                 </div>
-              )}
 
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsQrModalOpen(false)}
-                  className="w-1/2 rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="w-1/2 rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {isPending ? "Validating..." : "Validate & Collect"}
-                </button>
+                {qrFeedback && (
+                  <div
+                    className={`rounded-2xl p-3 text-xs font-medium ${
+                      qrFeedback.type === "success"
+                        ? "bg-emerald-950/80 border border-emerald-800 text-emerald-200"
+                        : "bg-rose-950/80 border border-rose-800 text-rose-200"
+                    }`}
+                  >
+                    {qrFeedback.message}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeCollectModal}
+                    className="w-1/2 rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    id="qr-collect-submit"
+                    type="submit"
+                    disabled={isPending}
+                    className="w-1/2 rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {isPending ? "Validating…" : "Validate & Collect"}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* ── Serial tab ── */}
+            {collectTab === "serial" && (
+              <div className="mt-5 space-y-4">
+                {/* Step 1: lookup */}
+                {serialStep === "lookup" && (
+                  <form onSubmit={handleSerialLookup} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-300">
+                        Today&apos;s Order Number
+                      </label>
+                      <p className="mt-1 text-[11px] text-zinc-500">
+                        Enter the 3-digit daily order number (e.g. 001, 042).
+                      </p>
+                      <input
+                        id="serial-input"
+                        type="number"
+                        min="1"
+                        max="2000"
+                        value={serialInput}
+                        onChange={(e) => setSerialInput(e.target.value)}
+                        placeholder="e.g. 42"
+                        className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-2xl font-black text-white placeholder-zinc-700 focus:border-violet-500 focus:outline-none text-center tracking-widest"
+                        autoFocus
+                      />
+                    </div>
+
+                    {serialFeedback && (
+                      <div className="rounded-2xl bg-rose-950/80 border border-rose-800 p-3 text-xs text-rose-200">
+                        {serialFeedback.message}
+                      </div>
+                    )}
+
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={closeCollectModal}
+                        className="w-1/2 rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        id="serial-lookup-submit"
+                        type="submit"
+                        disabled={isPending}
+                        className="w-1/2 rounded-2xl bg-violet-600 px-4 py-3 text-xs font-bold text-white hover:bg-violet-500 disabled:opacity-50"
+                      >
+                        {isPending ? "Looking up…" : "Find Order"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Step 2: confirm collect */}
+                {serialStep === "confirm" && serialLookupResult && (
+                  <div className="space-y-4">
+                    {/* Order summary card */}
+                    <div className="rounded-2xl border border-zinc-700 bg-zinc-950 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                          Order Found
+                        </span>
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-extrabold border ${
+                            serialLookupResult.status === "READY"
+                              ? "bg-emerald-950 text-emerald-300 border-emerald-800"
+                              : serialLookupResult.status === "COLLECTED"
+                              ? "bg-zinc-800 text-zinc-300 border-zinc-700"
+                              : "bg-amber-950 text-amber-300 border-amber-800"
+                          }`}
+                        >
+                          {serialLookupResult.status}
+                        </span>
+                      </div>
+                      <div className="text-4xl font-black text-white tracking-tight">
+                        #
+                        {serialLookupResult.dailySerial != null
+                          ? String(serialLookupResult.dailySerial).padStart(3, "0")
+                          : "—"}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 font-mono">{serialLookupResult.orderNumber}</div>
+                      <div className="flex items-center justify-between pt-1 border-t border-zinc-800">
+                        <span className="text-xs text-zinc-400">{serialLookupResult.paymentMethod}</span>
+                        <span className="text-sm font-black text-white">
+                          ৳{serialLookupResult.totalAmount?.toFixed(2) ?? "—"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {serialFeedback && (
+                      <div
+                        className={`rounded-2xl p-3 text-xs font-medium ${
+                          serialFeedback.type === "success"
+                            ? "bg-emerald-950/80 border border-emerald-800 text-emerald-200"
+                            : "bg-rose-950/80 border border-rose-800 text-rose-200"
+                        }`}
+                      >
+                        {serialFeedback.message}
+                      </div>
+                    )}
+
+                    {serialLookupResult.status === "READY" ? (
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={handleSerialBack}
+                          className="w-1/2 rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          id="serial-collect-confirm"
+                          type="button"
+                          onClick={handleSerialCollect}
+                          disabled={isPending}
+                          className="w-1/2 rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {isPending ? "Collecting…" : "Confirm Collect"}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl bg-amber-950/60 border border-amber-800/40 p-3 text-xs text-amber-300">
+                          This order is <strong>{serialLookupResult.status}</strong> — it cannot be collected yet.
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSerialBack}
+                          className="w-full rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800"
+                        >
+                          ← Back
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </form>
+            )}
           </div>
         </div>
       )}
 
-      {/* CANCELLATION MODAL */}
+      {/* ── CANCELLATION MODAL ─────────────────────────────────────────── */}
       {cancellingOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
@@ -538,7 +823,7 @@ export function TerminalDashboardClient({
                   disabled={isPending}
                   className="w-1/2 rounded-2xl bg-rose-600 px-4 py-3 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
                 >
-                  {isPending ? "Cancelling..." : "Confirm Cancel"}
+                  {isPending ? "Cancelling…" : "Confirm Cancel"}
                 </button>
               </div>
             </form>
@@ -549,7 +834,7 @@ export function TerminalDashboardClient({
   );
 }
 
-// Single Order Card Sub-component
+// ── OrderCard Sub-component ───────────────────────────────────────────────────
 type OrderCardProps = {
   order: TerminalOrder;
   onUpdateStatus?: () => void;
@@ -575,12 +860,18 @@ function OrderCard({
         {/* Header line */}
         <div className="flex items-start justify-between gap-2 border-b border-zinc-800/80 pb-3">
           <div>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-orange-400">
-              Order
-            </span>
-            <h3 className="text-2xl font-black tracking-tight text-white">
-              #{order.order_number}
-            </h3>
+            {/* Daily serial badge — prominent verbal identifier */}
+            {order.daily_serial != null ? (
+              <div className="mb-1 inline-flex items-center gap-1 rounded-lg bg-violet-950 border border-violet-800/60 px-2 py-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400">Order</span>
+                <span className="text-xl font-black text-violet-200 tabular-nums">
+                  #{String(order.daily_serial).padStart(3, "0")}
+                </span>
+              </div>
+            ) : (
+              <span className="text-[11px] font-bold uppercase tracking-wider text-orange-400">Order</span>
+            )}
+            <h3 className="text-xs font-mono text-zinc-500 mt-0.5">{order.order_number}</h3>
           </div>
           <div className="flex flex-col items-end">
             <span className="inline-flex rounded-full bg-amber-950 border border-amber-800/60 px-2.5 py-0.5 text-[10px] font-extrabold text-amber-300">

@@ -16,6 +16,7 @@ export type TerminalOrderItem = {
 export type TerminalOrder = {
   id: string;
   order_number: string;
+  daily_serial: number | null;
   status: "PLACED" | "PREPARING" | "READY" | "COLLECTED" | "CANCELLED";
   payment_method: "CASH" | "ONLINE";
   total_amount: number;
@@ -86,6 +87,7 @@ export async function getTerminalDashboardData(shopId: string) {
     .select(`
       id,
       order_number,
+      daily_serial,
       status,
       payment_method,
       total_amount,
@@ -118,6 +120,7 @@ export async function getTerminalDashboardData(shopId: string) {
   const orders: TerminalOrder[] = (ordersData ?? []).map((o) => ({
     id: o.id,
     order_number: o.order_number,
+    daily_serial: o.daily_serial != null ? Number(o.daily_serial) : null,
     status: o.status as TerminalOrder["status"],
     payment_method: o.payment_method as TerminalOrder["payment_method"],
     total_amount: Number(o.total_amount),
