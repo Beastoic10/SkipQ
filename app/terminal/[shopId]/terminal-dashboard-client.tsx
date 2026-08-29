@@ -144,11 +144,6 @@ export function TerminalDashboardClient({
     });
   }, [shopDetails.id]);
 
-  const handleScannerError = useCallback((message: string) => {
-    setIsScannerOpen(false);
-    setCollectionFeedback({ type: "error", message });
-  }, []);
-
   const handleCodeLookup = async (e: React.FormEvent) => {
     e.preventDefault();
     setCollectionFeedback(null);
@@ -560,7 +555,7 @@ export function TerminalDashboardClient({
 
             {collectionStep === "lookup" && collectMethod === "qr" && (
               <div className="mt-5 space-y-4">
-                <QRScanner active={isScannerOpen} onScan={handleQRScanned} onError={handleScannerError} />
+                <QRScanner active={isScannerOpen} onScan={handleQRScanned} onError={(message) => setCollectionFeedback({ type: "error", message })} />
                 <button type="button" onClick={() => setIsScannerOpen((open) => !open)} className="w-full rounded-2xl border border-zinc-700 px-4 py-3 text-xs font-bold text-zinc-300 hover:bg-zinc-800">
                   {isScannerOpen ? "Close scanner" : "Open camera scanner"}
                 </button>
@@ -691,14 +686,12 @@ function QRScanner({ active, onScan, onError }: QRScannerProps) {
 
     const start = async () => {
       if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-        cancelled = true;
         onError("Camera scanning is not available on this device. Use Enter Order Code instead.");
         return;
       }
 
       const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
       if (!Detector) {
-        cancelled = true;
         onError("This browser does not support built-in QR scanning. Use Enter Order Code instead.");
         return;
       }
@@ -716,8 +709,6 @@ function QRScanner({ active, onScan, onError }: QRScannerProps) {
             const codes = await detector.detect(videoRef.current);
             const token = codes[0]?.rawValue?.trim();
             if (token) {
-              cancelled = true;
-              stream?.getTracks().forEach((track) => track.stop());
               onScan(token);
               return;
             }
@@ -728,8 +719,6 @@ function QRScanner({ active, onScan, onError }: QRScannerProps) {
         };
         animationFrame = window.requestAnimationFrame(scan);
       } catch (err: unknown) {
-        cancelled = true;
-        stream?.getTracks().forEach((track) => track.stop());
         onError((err as Error)?.message || "Camera permission was denied or unavailable. Use Enter Order Code instead.");
       }
     };
