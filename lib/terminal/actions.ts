@@ -124,6 +124,17 @@ export async function cancelOrderAction(
   }
 }
 
+export type CollectionLookupResult = ActionResult & {
+  orderId?: string;
+  orderNumber?: string;
+  orderCode?: string;
+  status?: string;
+  totalAmount?: number;
+  paymentMethod?: string;
+  method: "qr" | "code";
+  credential: string;
+};
+
 export type LookupResult = ActionResult & {
   orderId?: string;
   orderNumber?: string;
@@ -133,34 +144,27 @@ export type LookupResult = ActionResult & {
   paymentMethod?: string;
 };
 
-/**
- * Look up today's order by its 4-digit order code (e.g. "0042" or "42").
- * Authorization is derived from the terminal session — the server-verified
- * shopId is used, so a malicious client cannot probe other shops.
- */
-export async function lookupOrderByCodeAction(
-  codeInput: string,
+
+export async function lookupCollectionQRAction(
+  tokenInput: string,
   shopId: string
-): Promise<LookupResult> {
+): Promise<CollectionLookupResult> {
   try {
-    const context = await requireTerminalShop(shopId);
+    await requireTerminalShop(shopId);
     const supabase = await createClient();
 
-    const raw = codeInput.trim().replace(/\D/g, "");
-    if (!raw || raw.length > 4) {
-      return { success: false, message: "Enter a 4-digit order code (e.g. 0042)" };
+    const token = tokenInput.trim();
+    if (!token) {
+      return { success: false, message: "Collection token is required", method: "qr", credential: "" };
     }
-    const paddedCode = raw.padStart(4, "0");
 
-    const { data, error } = await supabase.rpc("lookup_order_by_code", {
-      p_code:    paddedCode,
-      p_shop_id: context.shopId,
-      // p_order_date defaults to current_date on the server
+    const { data, error } = await supabase.rpc("lookup_collection_qr", {
+      p_token: token,
     });
 
     if (error) {
-      console.error("lookup_order_by_code RPC error:", error);
-      return { success: false, message: error.message || "Order lookup failed" };
+      console.error("lookup_collection_qr RPC error:", error);
+      return { success: false, message: error.message || "QR validation failed", method: "qr", credential: token };
     }
 
     const result = data as {
@@ -175,7 +179,69 @@ export async function lookupOrderByCodeAction(
     };
 
     if (!result?.found) {
-      return { success: false, message: result?.message || "Order not found" };
+      return { success: false, message: result?.message || "Invalid collection QR", method: "qr", credential: token };
+    }
+
+    return {
+      success: true,
+      message: result.message || `Order ${result.order_number || ""} found`,
+      orderId: result.order_id,
+      orderNumber: result.order_number,
+      orderCode: result.order_code,
+      status: result.status,
+      totalAmount: result.total_amount,
+      paymentMethod: result.payment_method,
+      method: "qr",
+      credential: token,
+    };
+  } catch (err: unknown) {
+    return { success: false, message: (err as Error)?.message || "QR validation failed", method: "qr", credential: tokenInput };
+  }
+}
+
+/**
+ * Look up today's order by its 4-digit order code (e.g. "0042" or "42").
+ * Authorization is derived from the terminal session — the server-verified
+ * shopId is used, so a malicious client cannot probe other shops.
+ */
+export async function lookupOrderByCodeAction(
+  codeInput: string,
+  shopId: string
+): Promise<CollectionLookupResult> {
+  try {
+    const context = await requireTerminalShop(shopId);
+    const supabase = await createClient();
+
+    const raw = codeInput.trim().replace(/\D/g, "");
+    if (!/^\d{4}$/.test(raw)) {
+      return { success: false, message: "Enter exactly 4 digits (0000–9999)", method: "code", credential: "" };
+    }
+    const paddedCode = raw.padStart(4, "0");
+
+    const { data, error } = await supabase.rpc("lookup_order_by_code", {
+      p_code:    paddedCode,
+      p_shop_id: context.shopId,
+      // p_order_date defaults to current_date on the server
+    });
+
+    if (error) {
+      console.error("lookup_order_by_code RPC error:", error);
+      return { success: false, message: error.message || "Order lookup failed", method: "code", credential: paddedCode };
+    }
+
+    const result = data as {
+      found?: boolean;
+      message?: string;
+      order_id?: string;
+      order_number?: string;
+      order_code?: string;
+      status?: string;
+      total_amount?: number;
+      payment_method?: string;
+    };
+
+    if (!result?.found) {
+      return { success: false, message: result?.message || "Order not found", method: "code", credential: paddedCode };
     }
 
     return {
@@ -187,11 +253,15 @@ export async function lookupOrderByCodeAction(
       status: result.status,
       totalAmount: result.total_amount,
       paymentMethod: result.payment_method,
+      method: "code",
+      credential: paddedCode,
     };
   } catch (err: unknown) {
     return {
       success: false,
       message: (err as Error)?.message || "Order lookup failed",
+      method: "code",
+      credential: codeInput,
     };
   }
 }
@@ -232,6 +302,10 @@ export async function collectOrderByCodeAction(
       message?: string;
       already_collected?: boolean;
     };
+
+    if (result?.already_collected) {
+      return { success: false, message: result.message || "Order is already collected" };
+    }
 
     revalidatePath(`/terminal/${context.shopId}`);
     return {
