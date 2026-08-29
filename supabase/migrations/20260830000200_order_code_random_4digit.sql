@@ -331,6 +331,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_order   public.orders%rowtype;
+  v_digits  text;
   v_padded  char(4);
 begin
   if v_user_id is null then raise exception 'Authentication required'; end if;
@@ -338,12 +339,13 @@ begin
     raise exception 'Not authorized for this shop';
   end if;
 
-  -- Normalize: strip non-digits then zero-pad to 4
-  v_padded := lpad(regexp_replace(trim(p_code), '[^0-9]', '', 'g'), 4, '0');
-  if length(trim(v_padded, '0') || '0') > 4 then
-    -- More than 4 significant digits after stripping
+  -- Normalize #9316-style input to the canonical 4-digit representation.
+  -- Valid order codes are exactly 0000 through 9999, including leading zeros.
+  v_digits := regexp_replace(trim(coalesce(p_code, '')), '[^0-9]', '', 'g');
+  if v_digits !~ '^[0-9]{4}$' then
     return jsonb_build_object('found', false, 'message', 'Invalid order code format');
   end if;
+  v_padded := v_digits::char(4);
 
   select * into v_order
   from public.orders
@@ -390,6 +392,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_order   public.orders%rowtype;
+  v_digits  text;
   v_padded  char(4);
 begin
   if v_user_id is null then raise exception 'Authentication required'; end if;
@@ -397,8 +400,13 @@ begin
     raise exception 'Not authorized for this shop';
   end if;
 
-  -- Normalize code
-  v_padded := lpad(regexp_replace(trim(p_code), '[^0-9]', '', 'g'), 4, '0');
+  -- Normalize #9316-style input to the canonical 4-digit representation.
+  -- Valid order codes are exactly 0000 through 9999, including leading zeros.
+  v_digits := regexp_replace(trim(coalesce(p_code, '')), '[^0-9]', '', 'g');
+  if v_digits !~ '^[0-9]{4}$' then
+    raise exception 'Invalid order code format';
+  end if;
+  v_padded := v_digits::char(4);
 
   -- Lock the order row
   select * into v_order
