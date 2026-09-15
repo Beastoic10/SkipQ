@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import { requireCustomer } from "@/lib/auth/session";
 import { CartProvider } from "@/lib/customer/cart-context";
 import { CustomerHeader } from "./customer-header";
 import { ActiveOrderBanner } from "./active-order-banner";
+import { ChatAgent } from "./chat-agent";
 
 export default async function CustomerLayout({
   children,
@@ -17,7 +19,11 @@ export default async function CustomerLayout({
         <CustomerHeader displayName={displayName} />
         {children}
         <ActiveOrderBanner />
+        <Suspense fallback={null}>
+          <ChatAgent />
+        </Suspense>
       </div>
     </CartProvider>
   );
 }
+
