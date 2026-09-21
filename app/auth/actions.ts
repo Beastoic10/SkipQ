@@ -104,27 +104,30 @@ export async function login(_previousState: AuthActionState, formData: FormData)
   redirect(redirectTo ?? getPostLoginPath(context?.roles ?? [], context?.terminalAccount?.shop_id));
 }
 
-export async function signup(_previousState: AuthActionState, formData: FormData) {
-  const supabase = await createClient();
-  const { email, password } = getCredentials(formData);
-  const confirmPassword = String(formData.get("confirmPassword") ?? "");
+export async function signup(_previousState: AuthActionState, formData: FormData): Promise<AuthActionState> {
+  try {
+    const supabase = await createClient();
+    const { email, password } = getCredentials(formData);
+    const confirmPassword = String(formData.get("confirmPassword") ?? "");
 
-  if (!email || !password || !confirmPassword) {
-    return { error: "Email, password, and password confirmation are required." };
-  }
+    if (!email || !password || !confirmPassword) {
+      return { error: "Email, password, and password confirmation are required." };
+    }
 
-  if (password !== confirmPassword) {
-    return { error: "Passwords do not match." };
-  }
+    if (password !== confirmPassword) {
+      return { error: "Passwords do not match." };
+    }
 
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      emailRedirectTo: `${getOrigin()}/auth/callback`,
-    },
-  });
-  logSupabaseOperation("supabase.auth.signUp", error);
+    console.log("[signup] calling supabase.auth.signUp for:", email);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${getOrigin()}/auth/callback`,
+      },
+    });
+    console.log("[signup] signUp returned:", { dataUser: !!data?.user, error });
+    logSupabaseOperation("supabase.auth.signUp", error);
 
   if (error) {
     return { error: getSafeDiagnosticError("supabase.auth.signUp", error) };
@@ -199,8 +202,13 @@ export async function signup(_previousState: AuthActionState, formData: FormData
     return { error: getSafeDiagnosticError(userRoleOperation, userRoleError) };
   }
 
-  if (!data.session) {
-    return { message: "Account created. Please confirm your email, then log in." };
+    if (!data.session) {
+      return { message: "Account created. Please confirm your email, then log in." };
+    }
+  } catch (err: unknown) {
+    console.error("[signup uncaught error]:", err);
+    const errorMessage = err instanceof Error ? err.message : "Signup failed due to an unexpected server error.";
+    return { error: errorMessage };
   }
 
   redirect("/customer");

@@ -1,24 +1,42 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
-import type { AuthActionState } from "./actions";
+import { useState, useTransition } from "react";
+import { login, signup, type AuthActionState } from "./actions";
 
 type AuthFormProps = {
   mode: "login" | "signup";
-  action: (previousState: AuthActionState, formData: FormData) => Promise<AuthActionState>;
+  action?: (previousState: AuthActionState, formData: FormData) => Promise<AuthActionState>;
   redirectTo?: string;
 };
 
-const initialState: AuthActionState = {};
-
 export function AuthForm({ mode, action, redirectTo }: AuthFormProps) {
-  const [state, formAction, pending] = useActionState(action, initialState);
+  const [state, setState] = useState<AuthActionState>({});
+  const [isPending, startTransition] = useTransition();
   const isSignup = mode === "signup";
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const actionFn = action ?? (isSignup ? signup : login);
+
+    startTransition(async () => {
+      try {
+        const res = await actionFn(state, formData);
+        if (res) {
+          setState(res);
+        }
+      } catch (err: unknown) {
+        console.error("Auth form submission error:", err);
+        const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred. Please try again.";
+        setState({ error: errorMessage });
+      }
+    });
+  };
 
   return (
     <form
-      action={formAction}
+      onSubmit={handleSubmit}
       className="space-y-4 rounded-3xl border border-zinc-200/80 bg-white p-6 shadow-sm sm:p-8"
     >
       {redirectTo ? (
@@ -97,10 +115,10 @@ export function AuthForm({ mode, action, redirectTo }: AuthFormProps) {
 
       <button
         type="submit"
-        disabled={pending}
+        disabled={isPending}
         className="w-full rounded-full bg-orange-600 px-5 py-3.5 text-xs font-bold text-white shadow-md shadow-orange-600/20 transition hover:bg-orange-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {pending
+        {isPending
           ? isSignup
             ? "Creating account…"
             : "Signing in…"
