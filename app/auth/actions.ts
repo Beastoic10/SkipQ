@@ -134,6 +134,10 @@ export async function signup(_previousState: AuthActionState, formData: FormData
     return { error: "Signup could not be completed. Please try again." };
   }
 
+  if (!data.user.identities || data.user.identities.length === 0) {
+    return { error: "An account already exists for this email. Try logging in instead." };
+  }
+
   const admin = createAdminClient();
   const { error: profileError } = await admin
     .from("profiles")
@@ -141,6 +145,9 @@ export async function signup(_previousState: AuthActionState, formData: FormData
   logSupabaseOperation("admin.profiles.upsert", profileError);
 
   if (profileError) {
+    if (getErrorField(profileError, "code") === "23503" || String(profileError.code) === "23503") {
+      return { error: "An account already exists for this email. Try logging in instead." };
+    }
     return { error: getSafeDiagnosticError("admin.profiles.upsert", profileError) };
   }
 
