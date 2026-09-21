@@ -68,6 +68,16 @@ export function CustomerMenuClient({
             text.includes("tea") ||
             text.includes("chai") ||
             text.includes("coffee") ||
+            text.includes("brew") ||
+            text.includes("espresso") ||
+            text.includes("americano") ||
+            text.includes("cappuc") ||
+            text.includes("latte") ||
+            text.includes("mocha") ||
+            text.includes("chocolate") ||
+            text.includes("fezz") ||
+            text.includes("fizz") ||
+            text.includes("mint") ||
             text.includes("drink") ||
             text.includes("juice") ||
             text.includes("cola") ||

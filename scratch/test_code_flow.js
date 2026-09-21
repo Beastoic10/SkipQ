@@ -25,7 +25,11 @@ async function test() {
   console.log("==================================================\n");
 
   const adminClient = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-  const { data: term1Acc } = await adminClient.from('terminal_accounts').select('*').eq('display_name', 'Ground Floor Terminal').single();
+  let { data: term1Acc } = await adminClient.from('terminal_accounts').select('*').eq('display_name', 'Campus Brew Cafe').maybeSingle();
+  if (!term1Acc) {
+    const res = await adminClient.from('terminal_accounts').select('*').eq('display_name', 'Ground Floor Terminal').single();
+    term1Acc = res.data;
+  }
   const { data: term2Acc } = await adminClient.from('terminal_accounts').select('*').eq('display_name', '1st Floor Terminal').single();
 
   const term1Client = createClient(supabaseUrl, anonKey, { auth: { persistSession: false } });

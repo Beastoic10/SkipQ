@@ -27,7 +27,11 @@ async function main() {
   const adminClient = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
   // 1. Fetch test terminals
-  const { data: term1Acc } = await adminClient.from('terminal_accounts').select('*, shops(*)').eq('display_name', 'Ground Floor Terminal').single();
+  let { data: term1Acc } = await adminClient.from('terminal_accounts').select('*, shops(*)').eq('display_name', 'Campus Brew Cafe').maybeSingle();
+  if (!term1Acc) {
+    const res = await adminClient.from('terminal_accounts').select('*, shops(*)').eq('display_name', 'Ground Floor Terminal').single();
+    term1Acc = res.data;
+  }
   const { data: term2Acc } = await adminClient.from('terminal_accounts').select('*, shops(*)').eq('display_name', '1st Floor Terminal').single();
 
   console.log("✓ Test Terminals found:");

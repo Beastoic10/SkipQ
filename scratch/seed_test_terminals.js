@@ -45,14 +45,16 @@ async function main() {
   if (!shop1) {
     const { data: created, error } = await supabase.from('shops').insert({
       cafeteria_id: cafeteria.id,
-      name: "Ground Floor Terminal Shop",
+      name: "Campus Brew Cafe",
       slug: "ground-floor",
-      description: "Main Ground Floor Counter",
+      description: "Fresh Roasted Beans & Specialty Drinks",
       is_active: true,
       approval_status: 'APPROVED'
     }).select().single();
     if (error) { console.error("Error creating shop 1:", error); return; }
     shop1 = created;
+  } else if (shop1.name !== "Campus Brew Cafe") {
+    await supabase.from('shops').update({ name: "Campus Brew Cafe", description: "Fresh Roasted Beans & Specialty Drinks" }).eq('id', shop1.id);
   }
 
   let { data: shop2 } = await supabase.from('shops').select('*').eq('cafeteria_id', cafeteria.id).eq('slug', 'first-floor').maybeSingle();
@@ -123,12 +125,12 @@ async function main() {
   const terminalRoleId = roleData.id;
 
   // Setup User 1 Profile, Role, Terminal Account
-  await supabase.from('profiles').upsert({ id: user1.id, display_name: "Ground Floor Terminal", is_active: true });
+  await supabase.from('profiles').upsert({ id: user1.id, display_name: "Campus Brew Cafe", is_active: true });
   const { data: u1Role } = await supabase.from('user_roles').select('id').eq('user_id', user1.id).eq('role_id', terminalRoleId).maybeSingle();
   if (!u1Role) {
     await supabase.from('user_roles').insert({ user_id: user1.id, role_id: terminalRoleId, is_active: true });
   }
-  await supabase.from('terminal_accounts').upsert({ auth_user_id: user1.id, shop_id: shop1.id, display_name: "Ground Floor Terminal", is_active: true }, { onConflict: 'auth_user_id' });
+  await supabase.from('terminal_accounts').upsert({ auth_user_id: user1.id, shop_id: shop1.id, display_name: "Campus Brew Cafe", is_active: true }, { onConflict: 'auth_user_id' });
 
   // Setup User 2 Profile, Role, Terminal Account
   await supabase.from('profiles').upsert({ id: user2.id, display_name: "1st Floor Terminal", is_active: true });
