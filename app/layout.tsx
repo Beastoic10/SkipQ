@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import ClarityProvider from "@/components/clarity-provider";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -23,6 +24,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full antialiased scroll-smooth" data-scroll-behavior="smooth">
       <body className="min-h-full flex flex-col bg-[#FAF9F6] text-zinc-900 selection:bg-orange-500 selection:text-white">
+        <ClarityProvider />
         {children}
       </body>
     </html>
